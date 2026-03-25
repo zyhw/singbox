@@ -41,7 +41,7 @@ if [ "$UPGRADE_CHOICE" == "2" ]; then
     ARCH=$(dpkg --print-architecture)
     if [[ "$TARGET_VERSION" == *"*"* ]]; then
         PREFIX=$(echo "$TARGET_VERSION" | sed 's/\.\*$//')
-        GITHUB_LATEST=$(git ls-remote --tags https://github.com/SagerNet/sing-box.git | awk -F/ '{print $3}' | grep -E "^v${PREFIX}\." | grep -v '\^{}' | sort -V | tail -n 1 | sed 's/^v//')
+        GITHUB_LATEST=$(curl -s "https://api.github.com/repos/SagerNet/sing-box/tags?per_page=100" | grep -o "\"name\": \"v${PREFIX}\.[0-9]*\"" | grep -o "${PREFIX}\.[0-9]*" | sort -V | tail -n 1)
         if [ -z "$GITHUB_LATEST" ]; then
             echo -e "${RED}无法从 GitHub 获取 ${TARGET_VERSION} 的最新版本，回退到 apt 升级...${NC}"
             if sudo apt-get install "sing-box=${TARGET_VERSION}" -y; then

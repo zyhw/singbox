@@ -44,7 +44,7 @@ sudo apt-get update -qq
 if [ "$INSTALL_CHOICE" == "2" ]; then
     echo "正在从 GitHub 获取最新的 sing-box 1.12.x 版本..."
     ARCH=$(dpkg --print-architecture)
-    GITHUB_LATEST=$(git ls-remote --tags https://github.com/SagerNet/sing-box.git | awk -F/ '{print $3}' | grep -E '^v1\.12\.' | grep -v '\^{}' | sort -V | tail -n 1 | sed 's/^v//')
+    GITHUB_LATEST=$(curl -s "https://api.github.com/repos/SagerNet/sing-box/tags?per_page=100" | grep -o '"name": "v1\.12\.[0-9]*"' | grep -o '1\.12\.[0-9]*' | sort -V | tail -n 1)
     if [ -z "$GITHUB_LATEST" ]; then
         echo -e "${RED}无法从 GitHub 获取最新版本，自动回退到 apt 软件源安装...${NC}"
         sudo apt-get install sing-box=1.12.* -yq || sudo apt-get install sing-box -yq
