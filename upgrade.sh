@@ -2,15 +2,15 @@
 
 # sing-box 升级脚本
 # 用法: bash upgrade.sh [目标版本]
-# 示例: bash upgrade.sh          → 升级到最新 1.12.x
-#       bash upgrade.sh 1.12.24  → 升级到指定版本
+# 示例: bash upgrade.sh          → 升级到最新 1.14.x
+#       bash upgrade.sh 1.14.1   → 升级到指定版本
 
 CYAN='\033[0;36m'
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 NC='\033[0m'
 
-TARGET_VERSION="${1:-1.12.*}"
+TARGET_VERSION="${1:-1.14.*}"
 
 # 如果指定了具体版本号（不含通配符），补全为 apt 包格式
 if [[ "$TARGET_VERSION" != *"*"* ]]; then

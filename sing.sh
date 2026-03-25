@@ -15,7 +15,7 @@ SOCKS_PORT=${SOCKS_PORT:-1080}
 
 echo -e "\n请选择 sing-box 安装方式:"
 echo "1. 从官方 apt 软件源安装 (推荐, 由源决定具体版本)"
-echo "2. 从 GitHub 下载最新的 1.12.x Release 离线安装"
+echo "2. 从 GitHub 下载最新的 1.14.x Release 离线安装"
 read -p "请输入选项 [默认: 1]: " INSTALL_CHOICE
 INSTALL_CHOICE=${INSTALL_CHOICE:-1}
 
@@ -42,12 +42,12 @@ Signed-By: /etc/apt/keyrings/sagernet.asc" | sudo tee /etc/apt/sources.list.d/sa
 sudo apt-get update -qq
 
 if [ "$INSTALL_CHOICE" == "2" ]; then
-    echo "正在从 GitHub 获取最新的 sing-box 1.12.x 版本..."
+    echo "正在从 GitHub 获取最新的 sing-box 1.14.x 版本..."
     ARCH=$(dpkg --print-architecture)
-    GITHUB_LATEST=$(curl -s "https://api.github.com/repos/SagerNet/sing-box/tags?per_page=100" | grep -o '"name": "v1\.12\.[0-9]*"' | grep -o '1\.12\.[0-9]*' | sort -V | tail -n 1)
+    GITHUB_LATEST=$(curl -s "https://api.github.com/repos/SagerNet/sing-box/tags?per_page=100" | grep -o '"name": "v1\.14\.[0-9]*"' | grep -o '1\.14\.[0-9]*' | sort -V | tail -n 1)
     if [ -z "$GITHUB_LATEST" ]; then
         echo -e "${RED}无法从 GitHub 获取最新版本，自动回退到 apt 软件源安装...${NC}"
-        sudo apt-get install sing-box=1.12.* -yq || sudo apt-get install sing-box -yq
+        sudo apt-get install sing-box=1.14.* -yq || sudo apt-get install sing-box -yq
     else
         DOWNLOAD_URL="https://github.com/SagerNet/sing-box/releases/download/v${GITHUB_LATEST}/sing-box_${GITHUB_LATEST}_linux_${ARCH}.deb"
         FILE_NAME="/tmp/sing-box_${GITHUB_LATEST}_linux_${ARCH}.deb"
@@ -57,13 +57,13 @@ if [ "$INSTALL_CHOICE" == "2" ]; then
             rm -f "$FILE_NAME"
         else
             echo -e "${RED}包下载失败，自动回退到 apt 软件源安装...${NC}"
-            sudo apt-get install sing-box=1.12.* -yq || sudo apt-get install sing-box -yq
+            sudo apt-get install sing-box=1.14.* -yq || sudo apt-get install sing-box -yq
         fi
     fi
 else
-    echo "正在从 apt 软件源安装 sing-box 1.12.x 稳定版..."
-    # 安装 1.12.x 版本
-    sudo apt-get install sing-box=1.12.* -yq || sudo apt-get install sing-box -yq
+    echo "正在从 apt 软件源安装 sing-box 1.14.x 稳定版..."
+    # 安装 1.14.x 版本
+    sudo apt-get install sing-box=1.14.* -yq || sudo apt-get install sing-box -yq
 fi
 
 # 锁定版本，避免被 apt upgrade 自动升级掉
@@ -106,14 +106,14 @@ cat <<EOF | sudo tee /etc/sing-box/config.json > /dev/null
   "log": { "level": "info", "timestamp": true },
   "dns": {
     "servers": [
-      { "tag": "local", "address": "local" },
-      { "tag": "proxy", "address": "1.1.1.1" }
+      { "type": "local", "tag": "local" },
+      { "type": "udp", "tag": "proxy", "server": "1.1.1.1" }
     ],
     "rules": [
       { "rule_set": "geosite-cn", "server": "local" }
     ],
     "final": "proxy",
-    "strategy": "ipv4_only" 
+    "strategy": "ipv4_only"
   },
   "inbounds": [
     {
@@ -145,6 +145,10 @@ cat <<EOF | sudo tee /etc/sing-box/config.json > /dev/null
     { "tag": "直接出站", "type": "direct" }
   ],
   "route": {
+    "default_domain_resolver": {
+      "server": "local",
+      "strategy": "ipv4_only"
+    },
     "rules": [
       { "ip_is_private": true, "outbound": "直接出站" },
       { "rule_set": ["geosite-cn", "geoip-cn"], "outbound": "直接出站" }
