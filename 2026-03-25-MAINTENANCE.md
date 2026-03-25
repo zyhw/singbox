@@ -27,6 +27,12 @@ bash <(curl -sL "https://raw.githubusercontent.com/zyhw/singbox/refs/heads/main/
 ```
 脚本会自动：解除版本锁定 → 升级 → 重新锁定 → 校验配置 → 重启服务。配置文件不受影响。
 
+## 已执行的关键操作 (2026-03-25)
+1. **统一升级与安装互动菜单**: `sing.sh` 和 `upgrade.sh` 已支持互动菜单选择，让用户能动态选择使用 `apt` 软件源下载或从 `GitHub Releases` 下载最新 1.12.x 版本。
+2. **支持 GitHub Releases 回退机制**: 脚本利用 `git ls-remote` 获取最新的 `1.12.*` 标签，并自动下载对应架构的 `.deb` 包，若 GitHub 下载失败将自动回退到 `apt-get` 的稳定版本。
+3. **更新维护文档名称**: 依据规范，将老版本的 `MAINTENANCE.md` 重命名为 `2026-03-25-MAINTENANCE.md`。
+
 ## 后续维护建议
 - **更新脚本**: 若需修改配置（如端口、伪装域名），直接修改 `sing.sh` 后执行 `git commit` 与 `git push`。
 - **配置查看**: 部署完成后，具体参数保存在服务器的 `~/sing-box.txt` 中。
+- **添加其他版本兼容**: 之后若 sing-box 出了 1.13 或以上的大版本且需要支持，直接在 `upgrade.sh` 和 `sing.sh` 当中修改提取 `1.12` 的正则表达式和限制。

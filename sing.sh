@@ -13,6 +13,12 @@ VLESS_PORT=${VLESS_PORT:-443}
 read -p "请输入 SOCKS5 端口 [默认: 1080]: " SOCKS_PORT
 SOCKS_PORT=${SOCKS_PORT:-1080}
 
+echo -e "\n请选择 sing-box 安装方式:"
+echo "1. 从官方 apt 软件源安装 (推荐, 由源决定具体版本)"
+echo "2. 从 GitHub 下载最新的 1.12.x Release 离线安装"
+read -p "请输入选项 [默认: 1]: " INSTALL_CHOICE
+INSTALL_CHOICE=${INSTALL_CHOICE:-1}
+
 # 1. 自动清理冲突版本 (解决 dpkg 报错)
 echo "正在检查并清理旧版本..."
 sudo systemctl stop sing-box &>/dev/null
@@ -34,9 +40,33 @@ Enabled: yes
 Signed-By: /etc/apt/keyrings/sagernet.asc" | sudo tee /etc/apt/sources.list.d/sagernet.sources > /dev/null
 
 sudo apt-get update -qq
-echo "正在安装 sing-box 1.12.x 稳定版..."
-# 安装 1.12.x 版本并锁定，避免自动升级
-sudo apt-get install sing-box=1.12.* -yq || sudo apt-get install sing-box -yq
+
+if [ "$INSTALL_CHOICE" == "2" ]; then
+    echo "正在从 GitHub 获取最新的 sing-box 1.12.x 版本..."
+    ARCH=$(dpkg --print-architecture)
+    GITHUB_LATEST=$(git ls-remote --tags https://github.com/SagerNet/sing-box.git | awk -F/ '{print $3}' | grep -E '^v1\.12\.' | grep -v '\^{}' | sort -V | tail -n 1 | sed 's/^v//')
+    if [ -z "$GITHUB_LATEST" ]; then
+        echo -e "${RED}无法从 GitHub 获取最新版本，自动回退到 apt 软件源安装...${NC}"
+        sudo apt-get install sing-box=1.12.* -yq || sudo apt-get install sing-box -yq
+    else
+        DOWNLOAD_URL="https://github.com/SagerNet/sing-box/releases/download/v${GITHUB_LATEST}/sing-box_${GITHUB_LATEST}_linux_${ARCH}.deb"
+        FILE_NAME="/tmp/sing-box_${GITHUB_LATEST}_linux_${ARCH}.deb"
+        echo "正在下载: ${DOWNLOAD_URL}"
+        if curl -L --fail "$DOWNLOAD_URL" -o "$FILE_NAME"; then
+            sudo dpkg -i "$FILE_NAME"
+            rm -f "$FILE_NAME"
+        else
+            echo -e "${RED}包下载失败，自动回退到 apt 软件源安装...${NC}"
+            sudo apt-get install sing-box=1.12.* -yq || sudo apt-get install sing-box -yq
+        fi
+    fi
+else
+    echo "正在从 apt 软件源安装 sing-box 1.12.x 稳定版..."
+    # 安装 1.12.x 版本
+    sudo apt-get install sing-box=1.12.* -yq || sudo apt-get install sing-box -yq
+fi
+
+# 锁定版本，避免被 apt upgrade 自动升级掉
 sudo apt-mark hold sing-box 2>/dev/null
 
 # 如果以后想解锁升级，运行：

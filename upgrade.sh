@@ -21,6 +21,12 @@ CURRENT_VERSION=$(sing-box version 2>/dev/null | head -1 | awk '{print $NF}')
 echo -e "${CYAN}当前版本: ${CURRENT_VERSION:-未安装}${NC}"
 echo -e "${CYAN}目标版本: ${TARGET_VERSION}${NC}"
 
+echo -e "\n请选择升级方式:"
+echo "1. 从官方 apt 软件源升级 (推荐)"
+echo "2. 从 GitHub 下载最新 release 升级"
+read -p "请输入选项 [默认: 1]: " UPGRADE_CHOICE
+UPGRADE_CHOICE=${UPGRADE_CHOICE:-1}
+
 # 1. 解除版本锁定
 echo "解除版本锁定..."
 sudo apt-mark unhold sing-box 2>/dev/null
@@ -30,14 +36,68 @@ echo "更新仓库索引..."
 sudo apt-get update -qq
 
 # 3. 升级
-echo "正在升级 sing-box..."
-if sudo apt-get install "sing-box=${TARGET_VERSION}" -y; then
-    NEW_VERSION=$(sing-box version | head -1 | awk '{print $NF}')
-    echo -e "${GREEN}升级成功: ${CURRENT_VERSION:-N/A} → ${NEW_VERSION}${NC}"
+if [ "$UPGRADE_CHOICE" == "2" ]; then
+    echo "正在从 GitHub 获取最新的 release 进行升级..."
+    ARCH=$(dpkg --print-architecture)
+    if [[ "$TARGET_VERSION" == *"*"* ]]; then
+        PREFIX=$(echo "$TARGET_VERSION" | sed 's/\.\*$//')
+        GITHUB_LATEST=$(git ls-remote --tags https://github.com/SagerNet/sing-box.git | awk -F/ '{print $3}' | grep -E "^v${PREFIX}\." | grep -v '\^{}' | sort -V | tail -n 1 | sed 's/^v//')
+        if [ -z "$GITHUB_LATEST" ]; then
+            echo -e "${RED}无法从 GitHub 获取 ${TARGET_VERSION} 的最新版本，回退到 apt 升级...${NC}"
+            if sudo apt-get install "sing-box=${TARGET_VERSION}" -y; then
+                NEW_VERSION=$(sing-box version 2>/dev/null | head -1 | awk '{print $NF}')
+                echo -e "${GREEN}软件源升级成功: ${CURRENT_VERSION:-N/A} → ${NEW_VERSION}${NC}"
+            else
+                echo -e "${RED}软件源中未找到指定版本或升级失败。${NC}"
+                sudo apt-mark hold sing-box 2>/dev/null
+                exit 1
+            fi
+            FETCH_VERSION=""
+        else
+            FETCH_VERSION="$GITHUB_LATEST"
+        fi
+    else
+        FETCH_VERSION="$TARGET_VERSION"
+    fi
+    
+    if [ -n "$FETCH_VERSION" ]; then
+        DOWNLOAD_URL="https://github.com/SagerNet/sing-box/releases/download/v${FETCH_VERSION}/sing-box_${FETCH_VERSION}_linux_${ARCH}.deb"
+        FILE_NAME="/tmp/sing-box_${FETCH_VERSION}_linux_${ARCH}.deb"
+        echo -e "${CYAN}正在下载: ${DOWNLOAD_URL}${NC}"
+        
+        if curl -L --fail "$DOWNLOAD_URL" -o "$FILE_NAME"; then
+            if sudo dpkg -i "$FILE_NAME"; then
+                NEW_VERSION=$(sing-box version 2>/dev/null | head -1 | awk '{print $NF}')
+                echo -e "${GREEN}GitHub 升级成功: ${CURRENT_VERSION:-N/A} → ${NEW_VERSION}${NC}"
+                rm -f "$FILE_NAME"
+            else
+                echo -e "${RED}dpkg 安装失败。${NC}"
+                sudo apt-mark hold sing-box 2>/dev/null
+                rm -f "$FILE_NAME"
+                exit 1
+            fi
+        else
+            echo -e "${RED}下载失败，回退到 apt 升级...${NC}"
+            if sudo apt-get install "sing-box=${TARGET_VERSION}" -y; then
+                NEW_VERSION=$(sing-box version 2>/dev/null | head -1 | awk '{print $NF}')
+                echo -e "${GREEN}软件源升级成功: ${CURRENT_VERSION:-N/A} → ${NEW_VERSION}${NC}"
+            else
+                echo -e "${RED}软件源升级失败，请检查网络或版本号。${NC}"
+                sudo apt-mark hold sing-box 2>/dev/null
+                exit 1
+            fi
+        fi
+    fi
 else
-    echo -e "${RED}升级失败，请检查版本号是否正确。${NC}"
-    sudo apt-mark hold sing-box 2>/dev/null
-    exit 1
+    echo "正在从 apt 软件源升级 sing-box..."
+    if sudo apt-get install "sing-box=${TARGET_VERSION}" -y; then
+        NEW_VERSION=$(sing-box version | head -1 | awk '{print $NF}')
+        echo -e "${GREEN}软件源升级成功: ${CURRENT_VERSION:-N/A} → ${NEW_VERSION}${NC}"
+    else
+        echo -e "${RED}升级失败，请检查版本号是否正确。${NC}"
+        sudo apt-mark hold sing-box 2>/dev/null
+        exit 1
+    fi
 fi
 
 # 4. 重新锁定版本

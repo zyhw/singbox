@@ -25,4 +25,6 @@ bash <(curl -sL "https://raw.githubusercontent.com/zyhw/singbox/refs/heads/main/
 - 支持 VLESS Reality 配置
 - 支持 SOCKS5 代理（随机用户名/密码）
 - 自动生成分享链接及配置文件
-- 可复用升级脚本，支持指定版本或通配升级
+- 可复用的升级脚本，支持指定版本或通配升级
+- **全新支持：安装与升级提供互动式菜单，可自由选择官方 apt 源或从 GitHub Releases 下载最新 1.12.x 离线包安装**
+- **智能回退机制：GitHub 下载超时或失败会自动安全回退至稳定的 apt 软件源流程**
