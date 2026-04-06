@@ -140,7 +140,8 @@ KEYS=$(sing-box generate reality-keypair)
 PRIVATE_KEY=$(echo "$KEYS" | grep "PrivateKey" | awk -F': ' '{print $2}')
 PUBLIC_KEY=$(echo "$KEYS" | grep "PublicKey" | awk -F': ' '{print $2}')
 SHORT_ID=$(openssl rand -hex 8)
-SERVER_IP=$(curl -4 -s ifconfig.me)
+SERVER_IP=$(curl -4 -s ifconfig.me -m 5)
+SERVER_IP6=$(curl -6 -s ifconfig.me -m 5 2>/dev/null || echo "")
 if [ "$PROTO_CHOICE" != "2" ]; then
     SOCKS_USER=$(openssl rand -hex 4)
     SOCKS_PASS="$UUID"
@@ -169,7 +170,7 @@ cat <<EOF | sudo tee /etc/sing-box/config.json > /dev/null
       { "rule_set": "geosite-cn", "server": "local" }
     ],
     "final": "proxy",
-    "strategy": "ipv4_only" 
+    "strategy": "prefer_ipv4"
   },
   "inbounds": [
     {
@@ -227,23 +228,32 @@ if sudo sing-box check -c /etc/sing-box/config.json; then
     
     # 8. 自动生成分享链接
     VLESS_LINK="vless://${UUID}@${SERVER_IP}:${VLESS_PORT}?type=tcp&encryption=none&security=reality&pbk=${PUBLIC_KEY}&fp=chrome&sni=${SNI}&sid=${SHORT_ID}&flow=xtls-rprx-vision#Auto_Reality"
+    if [ -n "$SERVER_IP6" ]; then
+        VLESS_LINK6="vless://${UUID}@[${SERVER_IP6}]:${VLESS_PORT}?type=tcp&encryption=none&security=reality&pbk=${PUBLIC_KEY}&fp=chrome&sni=${SNI}&sid=${SHORT_ID}&flow=xtls-rprx-vision#Auto_Reality_IPv6"
+    fi
 
     # 保存到文件
     if [ "$PROTO_CHOICE" != "2" ]; then
         SOCKS_LINK="socks5://${SOCKS_USER}:${SOCKS_PASS}@${SERVER_IP}:${SOCKS_PORT}"
+        SOCKS_LINK6=""
+        if [ -n "$SERVER_IP6" ]; then
+            SOCKS_LINK6="socks5://${SOCKS_USER}:${SOCKS_PASS}@[${SERVER_IP6}]:${SOCKS_PORT}"
+        fi
         cat > ~/sing-box.txt <<EOL
-==================== VLESS Reality ====================
+==================== VLESS Reality (IPv4) ====================
 $VLESS_LINK
-
-==================== SOCKS5 代理 ====================
+$([ -n "$SERVER_IP6" ] && echo -e "\n==================== VLESS Reality (IPv6) ====================\n$VLESS_LINK6")
+==================== SOCKS5 代理 (IPv4) ====================
 $SOCKS_LINK
-========================================================
+$([ -n "$SERVER_IP6" ] && echo -e "\n==================== SOCKS5 代理 (IPv6) ====================\n$SOCKS_LINK6")
+==============================================================
 EOL
     else
         cat > ~/sing-box.txt <<EOL
-==================== VLESS Reality ====================
+==================== VLESS Reality (IPv4) ====================
 $VLESS_LINK
-========================================================
+$([ -n "$SERVER_IP6" ] && echo -e "\n==================== VLESS Reality (IPv6) ====================\n$VLESS_LINK6")
+==============================================================
 EOL
     fi
 
@@ -252,12 +262,22 @@ EOL
     echo -e "${CYAN}自动部署完成！${NC}"
     echo -e "配置已保存至: ~/sing-box.txt"
     echo -e "${CYAN}==================================================${NC}"
-    echo -e "${CYAN}【VLESS Reality】${NC}"
+    echo -e "${CYAN}【VLESS Reality - IPv4】${NC}"
     echo -e "$VLESS_LINK"
+    if [ -n "$SERVER_IP6" ]; then
+        echo -e "${CYAN}==================================================${NC}"
+        echo -e "${CYAN}【VLESS Reality - IPv6】${NC}"
+        echo -e "$VLESS_LINK6"
+    fi
     if [ "$PROTO_CHOICE" != "2" ]; then
         echo -e "${CYAN}==================================================${NC}"
-        echo -e "${CYAN}【SOCKS5 代理】${NC}"
+        echo -e "${CYAN}【SOCKS5 代理 - IPv4】${NC}"
         echo -e "$SOCKS_LINK"
+        if [ -n "$SERVER_IP6" ]; then
+            echo -e "${CYAN}==================================================${NC}"
+            echo -e "${CYAN}【SOCKS5 代理 - IPv6】${NC}"
+            echo -e "$SOCKS_LINK6"
+        fi
     fi
     echo -e "${CYAN}==================================================${NC}"
 else
