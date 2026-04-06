@@ -28,8 +28,13 @@ echo "2. 从 GitHub 下载最新的 1.12.x Release 离线安装"
 read -p "请输入选项 [默认: 1]: " INSTALL_CHOICE
 INSTALL_CHOICE=${INSTALL_CHOICE:-1}
 
+echo -e "\n是否同时进行服务器网络性能与内核优化? (包括开启BBR、扩大连接数与缓冲区等限制)"
+echo "提升高并发跨境稳定性。推荐新服务器选择是 (Y)。"
+read -p "请输入选项 [Y/n, 默认: Y]: " OPTIMIZE_CHOICE
+OPTIMIZE_CHOICE=${OPTIMIZE_CHOICE:-Y}
+
 # 1. 自动清理冲突版本 (解决 dpkg 报错)
-echo "正在检查并清理旧版本..."
+echo -e "\n正在检查并清理旧版本..."
 sudo systemctl stop sing-box &>/dev/null
 sudo apt-get remove --purge sing-box sing-box-beta -y &>/dev/null
 sudo apt-get autoremove -y &>/dev/null
@@ -82,14 +87,54 @@ sudo apt-mark hold sing-box 2>/dev/null
 # sudo apt-mark unhold sing-box
 # sudo apt-get update && sudo apt-get upgrade sing-box
 
-# 3. 自动创建用户并设置权限
+# 3. 服务器网络与内核优化 (可选)
+if [[ "$OPTIMIZE_CHOICE" =~ ^[Yy]$ || "$OPTIMIZE_CHOICE" == "" ]]; then
+    echo -e "\n${CYAN}正在应用系统网络与内核优化...${NC}"
+    if ! grep -q "net.core.default_qdisc=fq" /etc/sysctl.conf 2>/dev/null; then
+        sudo tee -a /etc/sysctl.conf > /dev/null << 'EOF'
+
+# === 通用代理服务端高并发优化 ===
+net.core.default_qdisc=fq
+net.ipv4.tcp_congestion_control=bbr
+net.core.somaxconn=4096
+net.core.netdev_max_backlog=16384
+net.core.rmem_default=26214400
+net.core.rmem_max=67108864
+net.core.wmem_default=26214400
+net.core.wmem_max=67108864
+net.ipv4.tcp_rmem=4096 87380 33554432
+net.ipv4.tcp_wmem=4096 65536 33554432
+net.ipv4.tcp_fastopen=3
+net.ipv4.tcp_mtu_probing=1
+net.ipv4.tcp_syncookies=1
+net.ipv4.ip_local_port_range=1024 65535
+EOF
+    fi
+    sudo sysctl -p > /dev/null 2>&1
+    
+    if ! grep -q "1048576" /etc/security/limits.conf 2>/dev/null; then
+        sudo mkdir -p /etc/security
+        sudo touch /etc/security/limits.conf
+        sudo tee -a /etc/security/limits.conf > /dev/null << 'EOF'
+
+* soft nofile 1048576
+* hard nofile 1048576
+root soft nofile 1048576
+root hard nofile 1048576
+EOF
+    fi
+    sudo systemctl daemon-reload >/dev/null 2>&1
+    echo -e "${GREEN}✓ 内核参数与文件描述符(ulimit)优化完成！${NC}"
+fi
+
+# 4. 自动创建用户并设置权限
 if ! id sing-box &>/dev/null; then
     sudo useradd --system --no-create-home --shell /usr/sbin/nologin sing-box
 fi
 sudo mkdir -p /var/lib/sing-box /etc/sing-box
 sudo chown -R sing-box:sing-box /var/lib/sing-box /etc/sing-box
 
-# 4. 自动生成 Reality 密钥对、UUID 和参数
+# 5. 自动生成 Reality 密钥对、UUID 和参数
 UUID=$(sing-box generate uuid)
 KEYS=$(sing-box generate reality-keypair)
 PRIVATE_KEY=$(echo "$KEYS" | grep "PrivateKey" | awk -F': ' '{print $2}')
@@ -111,7 +156,7 @@ SNI_LIST=(
 )
 SNI=${SNI_LIST[$RANDOM % ${#SNI_LIST[@]}]}
 
-# 5. 自动写入 JSON 配置文件
+# 6. 自动写入 JSON 配置文件
 cat <<EOF | sudo tee /etc/sing-box/config.json > /dev/null
 {
   "log": { "level": "info", "timestamp": true },
@@ -175,12 +220,12 @@ cat <<EOF | sudo tee /etc/sing-box/config.json > /dev/null
 }
 EOF
 
-# 6. 自动格式化、校验并启动
+# 7. 自动格式化、校验并启动
 sudo sing-box format -w -c /etc/sing-box/config.json
 if sudo sing-box check -c /etc/sing-box/config.json; then
     sudo systemctl enable --now sing-box
     
-    # 7. 自动生成分享链接
+    # 8. 自动生成分享链接
     VLESS_LINK="vless://${UUID}@${SERVER_IP}:${VLESS_PORT}?type=tcp&encryption=none&security=reality&pbk=${PUBLIC_KEY}&fp=chrome&sni=${SNI}&sid=${SHORT_ID}&flow=xtls-rprx-vision#Auto_Reality"
 
     # 保存到文件
