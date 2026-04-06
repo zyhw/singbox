@@ -7,11 +7,20 @@ NC='\033[0m'
 
 echo -e "${CYAN}正在开始 sing-box 全自动部署...${NC}"
 
+# 协议模式选择
+echo -e "\n请选择协议模式:"
+echo "1. VLESS + SOCKS5（默认）"
+echo "2. 仅 VLESS"
+read -p "请输入选项 [默认: 1]: " PROTO_CHOICE
+PROTO_CHOICE=${PROTO_CHOICE:-1}
+
 # 端口配置（可自定义，回车使用默认值）
 read -p "请输入 VLESS 端口 [默认: 443]: " VLESS_PORT
 VLESS_PORT=${VLESS_PORT:-443}
-read -p "请输入 SOCKS5 端口 [默认: 1080]: " SOCKS_PORT
-SOCKS_PORT=${SOCKS_PORT:-1080}
+if [ "$PROTO_CHOICE" != "2" ]; then
+    read -p "请输入 SOCKS5 端口 [默认: 1080]: " SOCKS_PORT
+    SOCKS_PORT=${SOCKS_PORT:-1080}
+fi
 
 echo -e "\n请选择 sing-box 安装方式:"
 echo "1. 从官方 apt 软件源安装 (推荐, 由源决定具体版本)"
@@ -87,8 +96,10 @@ PRIVATE_KEY=$(echo "$KEYS" | grep "PrivateKey" | awk -F': ' '{print $2}')
 PUBLIC_KEY=$(echo "$KEYS" | grep "PublicKey" | awk -F': ' '{print $2}')
 SHORT_ID=$(openssl rand -hex 8)
 SERVER_IP=$(curl -4 -s ifconfig.me)
-SOCKS_USER=$(openssl rand -hex 4)
-SOCKS_PASS="$UUID"
+if [ "$PROTO_CHOICE" != "2" ]; then
+    SOCKS_USER=$(openssl rand -hex 4)
+    SOCKS_PASS="$UUID"
+fi
 
 # SNI 伪装域名列表（美国服务器 + 中国访问友好）
 SNI_LIST=(
@@ -132,14 +143,14 @@ cat <<EOF | sudo tee /etc/sing-box/config.json > /dev/null
           "short_id": ["$SHORT_ID"]
         }
       }
-    },
+    }$(if [ "$PROTO_CHOICE" != "2" ]; then echo ",
     {
-      "tag": "SOCKS5-Proxy",
-      "type": "socks",
-      "listen": "::",
-      "listen_port": $SOCKS_PORT,
-      "users": [ { "username": "$SOCKS_USER", "password": "$SOCKS_PASS" } ]
-    }
+      \"tag\": \"SOCKS5-Proxy\",
+      \"type\": \"socks\",
+      \"listen\": "::",
+      \"listen_port\": $SOCKS_PORT,
+      \"users\": [ { \"username\": \"$SOCKS_USER\", \"password\": \"$SOCKS_PASS\" } ]
+    }"; fi)
   ],
   "outbounds": [
     { "tag": "直接出站", "type": "direct" }
@@ -171,12 +182,11 @@ if sudo sing-box check -c /etc/sing-box/config.json; then
     
     # 7. 自动生成分享链接
     VLESS_LINK="vless://${UUID}@${SERVER_IP}:${VLESS_PORT}?type=tcp&encryption=none&security=reality&pbk=${PUBLIC_KEY}&fp=chrome&sni=${SNI}&sid=${SHORT_ID}&flow=xtls-rprx-vision#Auto_Reality"
-    
-    # SOCKS5 链接
-    SOCKS_LINK="socks5://${SOCKS_USER}:${SOCKS_PASS}@${SERVER_IP}:${SOCKS_PORT}"
-    
+
     # 保存到文件
-    cat > ~/sing-box.txt <<EOL
+    if [ "$PROTO_CHOICE" != "2" ]; then
+        SOCKS_LINK="socks5://${SOCKS_USER}:${SOCKS_PASS}@${SERVER_IP}:${SOCKS_PORT}"
+        cat > ~/sing-box.txt <<EOL
 ==================== VLESS Reality ====================
 $VLESS_LINK
 
@@ -184,6 +194,13 @@ $VLESS_LINK
 $SOCKS_LINK
 ========================================================
 EOL
+    else
+        cat > ~/sing-box.txt <<EOL
+==================== VLESS Reality ====================
+$VLESS_LINK
+========================================================
+EOL
+    fi
 
     # 打印输出
     echo -e "\n${CYAN}==================================================${NC}"
@@ -192,9 +209,11 @@ EOL
     echo -e "${CYAN}==================================================${NC}"
     echo -e "${CYAN}【VLESS Reality】${NC}"
     echo -e "$VLESS_LINK"
-    echo -e "${CYAN}==================================================${NC}"
-    echo -e "${CYAN}【SOCKS5 代理】${NC}"
-    echo -e "$SOCKS_LINK"
+    if [ "$PROTO_CHOICE" != "2" ]; then
+        echo -e "${CYAN}==================================================${NC}"
+        echo -e "${CYAN}【SOCKS5 代理】${NC}"
+        echo -e "$SOCKS_LINK"
+    fi
     echo -e "${CYAN}==================================================${NC}"
 else
     echo -e "${RED}校验失败，请检查配置文件内容。${NC}"
