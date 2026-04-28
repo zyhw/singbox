@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 
 # 定义颜色
 CYAN='\033[0;36m'
@@ -18,9 +19,8 @@ fi
 
 echo -e "${YELLOW}正在进行内核网络优化 (包括 BBR, Somaxconn, 缓冲区扩大)...${NC}"
 
-# 配置 sysctl.conf
-if ! grep -q "net.core.default_qdisc=fq" /etc/sysctl.conf 2>/dev/null; then
-cat >> /etc/sysctl.conf << 'EOF'
+# 配置 sysctl drop-in（幂等覆盖）
+cat > /etc/sysctl.d/99-sing-box-optimize.conf << 'EOF'
 
 # === 通用代理服务端高并发优化 ===
 # BBR（提升拥塞控制与吞吐量）
@@ -45,22 +45,16 @@ net.ipv4.tcp_mtu_probing=1
 net.ipv4.tcp_syncookies=1
 net.ipv4.ip_local_port_range=1024 65535
 EOF
-    echo -e "${GREEN}✓ sysctl.conf 优化配置已写入。${NC}"
-else
-    echo -e "${YELLOW}ℹ sysctl.conf 已存在优化配置，跳过写入，避免重复。${NC}"
-fi
+echo -e "${GREEN}✓ /etc/sysctl.d/99-sing-box-optimize.conf 已写入。${NC}"
 
 # 应用 sysctl
-sysctl -p > /dev/null 2>&1
+sysctl --system > /dev/null
 echo -e "${GREEN}✓ sysctl 网络参数已生效。${NC}"
 
-# 配置 limits.conf
+# 配置 limits drop-in（幂等覆盖）
 echo -e "${YELLOW}正在扩大系统最大文件描述符限制 (ulimit)...${NC}"
-if ! grep -q "1048576" /etc/security/limits.conf 2>/dev/null; then
-    # 确保文件夹和文件存在
-    mkdir -p /etc/security
-    touch /etc/security/limits.conf
-cat >> /etc/security/limits.conf << 'EOF'
+mkdir -p /etc/security/limits.d
+cat > /etc/security/limits.d/99-sing-box.conf << 'EOF'
 
 # proxy server: raise open file limit
 * soft nofile 1048576
@@ -68,10 +62,7 @@ cat >> /etc/security/limits.conf << 'EOF'
 root soft nofile 1048576
 root hard nofile 1048576
 EOF
-    echo -e "${GREEN}✓ limits.conf 文件描述符配置已写入。${NC}"
-else
-    echo -e "${YELLOW}ℹ limits.conf 已存在相关限制配置，跳过写入。${NC}"
-fi
+echo -e "${GREEN}✓ /etc/security/limits.d/99-sing-box.conf 已写入。${NC}"
 
 # 重新加载 systemd 以使得 limits 可能的影响生效
 systemctl daemon-reload >/dev/null 2>&1

@@ -1,9 +1,40 @@
 #!/bin/bash
+set -euo pipefail
 
 # 定义颜色
 CYAN='\033[0;36m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m'
+
+die() {
+    echo -e "${RED}错误: $*${NC}" >&2
+    exit 1
+}
+
+is_valid_port() {
+    [[ "$1" =~ ^[0-9]+$ ]] && [ "$1" -ge 1 ] && [ "$1" -le 65535 ]
+}
+
+get_public_ip() {
+    local ip=""
+    ip="$(curl -4 -fsS --max-time 5 ifconfig.me 2>/dev/null || true)"
+    if [ -z "$ip" ]; then
+        ip="$(ip route get 1.1.1.1 2>/dev/null | awk '/src/ {for (i=1;i<=NF;i++) if ($i=="src") {print $(i+1); exit}}')"
+    fi
+    if [ -z "$ip" ]; then
+        ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    fi
+    echo "$ip"
+}
+
+if [ "${EUID:-$(id -u)}" -eq 0 ]; then
+    SUDO=""
+else
+    command -v sudo >/dev/null 2>&1 || die "需要 root 权限或 sudo。"
+    SUDO="sudo"
+fi
 
 echo -e "${CYAN}正在开始 sing-box 全自动部署...${NC}"
 
@@ -13,13 +44,19 @@ echo "1. VLESS + SOCKS5（默认）"
 echo "2. 仅 VLESS"
 read -p "请输入选项 [默认: 1]: " PROTO_CHOICE
 PROTO_CHOICE=${PROTO_CHOICE:-1}
+if [ "$PROTO_CHOICE" != "1" ] && [ "$PROTO_CHOICE" != "2" ]; then
+    echo -e "${YELLOW}无效选项，已回退到默认模式: 1${NC}"
+    PROTO_CHOICE=1
+fi
 
 # 端口配置（可自定义，回车使用默认值）
 read -p "请输入 VLESS 端口 [默认: 443]: " VLESS_PORT
 VLESS_PORT=${VLESS_PORT:-443}
+is_valid_port "$VLESS_PORT" || die "VLESS 端口无效: $VLESS_PORT"
 if [ "$PROTO_CHOICE" != "2" ]; then
     read -p "请输入 SOCKS5 端口 [默认: 1080]: " SOCKS_PORT
     SOCKS_PORT=${SOCKS_PORT:-1080}
+    is_valid_port "$SOCKS_PORT" || die "SOCKS5 端口无效: $SOCKS_PORT"
 fi
 
 echo -e "\n请选择 sing-box 安装方式:"
@@ -27,6 +64,10 @@ echo "1. 从官方 apt 软件源安装 (推荐, 由源决定具体版本)"
 echo "2. 从 GitHub 下载最新的 1.12.x Release 离线安装"
 read -p "请输入选项 [默认: 1]: " INSTALL_CHOICE
 INSTALL_CHOICE=${INSTALL_CHOICE:-1}
+if [ "$INSTALL_CHOICE" != "1" ] && [ "$INSTALL_CHOICE" != "2" ]; then
+    echo -e "${YELLOW}无效选项，已回退到默认安装方式: 1${NC}"
+    INSTALL_CHOICE=1
+fi
 
 echo -e "\n是否同时进行服务器网络性能与内核优化? (包括开启BBR、扩大连接数与缓冲区等限制)"
 echo "提升高并发跨境稳定性。推荐新服务器选择是 (Y)。"
@@ -35,53 +76,57 @@ OPTIMIZE_CHOICE=${OPTIMIZE_CHOICE:-Y}
 
 # 1. 自动清理冲突版本 (解决 dpkg 报错)
 echo -e "\n正在检查并清理旧版本..."
-sudo systemctl stop sing-box &>/dev/null
-sudo apt-get remove --purge sing-box sing-box-beta -y &>/dev/null
-sudo apt-get autoremove -y &>/dev/null
+$SUDO systemctl stop sing-box &>/dev/null || true
+$SUDO apt-get remove --purge sing-box sing-box-beta -y &>/dev/null || true
+$SUDO apt-get autoremove -y &>/dev/null || true
 
 # 2. 安装依赖并配置官方仓库
-sudo apt-get update -qq
-sudo apt-get install -y curl jq uuid-runtime openssl
-sudo mkdir -p /etc/apt/keyrings
-sudo curl -fsSL https://sing-box.app/gpg.key -o /etc/apt/keyrings/sagernet.asc
-sudo chmod a+r /etc/apt/keyrings/sagernet.asc
+$SUDO apt-get update -qq
+$SUDO apt-get install -y curl jq uuid-runtime openssl
+$SUDO mkdir -p /etc/apt/keyrings
+$SUDO curl -fsSL https://sing-box.app/gpg.key -o /etc/apt/keyrings/sagernet.asc
+$SUDO chmod a+r /etc/apt/keyrings/sagernet.asc
 
 echo "Types: deb
 URIs: https://deb.sagernet.org/
 Suites: *
 Components: *
 Enabled: yes
-Signed-By: /etc/apt/keyrings/sagernet.asc" | sudo tee /etc/apt/sources.list.d/sagernet.sources > /dev/null
+Signed-By: /etc/apt/keyrings/sagernet.asc" | $SUDO tee /etc/apt/sources.list.d/sagernet.sources > /dev/null
 
-sudo apt-get update -qq
+$SUDO apt-get update -qq
 
 if [ "$INSTALL_CHOICE" == "2" ]; then
     echo "正在从 GitHub 获取最新的 sing-box 1.12.x 版本..."
     ARCH=$(dpkg --print-architecture)
-    GITHUB_LATEST=$(curl -s "https://api.github.com/repos/SagerNet/sing-box/tags?per_page=100" | grep -o '"name": "v1\.12\.[0-9]*"' | grep -o '1\.12\.[0-9]*' | sort -V | tail -n 1)
+    GITHUB_LATEST="$(curl -fsSL "https://api.github.com/repos/SagerNet/sing-box/tags?per_page=100" \
+        | jq -r '.[].name' \
+        | sed -n 's/^v\(1\.12\.[0-9]\+\)$/\1/p' \
+        | sort -V \
+        | tail -n 1 || true)"
     if [ -z "$GITHUB_LATEST" ]; then
         echo -e "${RED}无法从 GitHub 获取最新版本，自动回退到 apt 软件源安装...${NC}"
-        sudo apt-get install sing-box=1.12.* -yq || sudo apt-get install sing-box -yq
+        $SUDO apt-get install sing-box=1.12.* -yq || $SUDO apt-get install sing-box -yq
     else
         DOWNLOAD_URL="https://github.com/SagerNet/sing-box/releases/download/v${GITHUB_LATEST}/sing-box_${GITHUB_LATEST}_linux_${ARCH}.deb"
         FILE_NAME="/tmp/sing-box_${GITHUB_LATEST}_linux_${ARCH}.deb"
         echo "正在下载: ${DOWNLOAD_URL}"
         if curl -L --fail "$DOWNLOAD_URL" -o "$FILE_NAME"; then
-            sudo dpkg -i "$FILE_NAME"
+            $SUDO dpkg -i "$FILE_NAME"
             rm -f "$FILE_NAME"
         else
             echo -e "${RED}包下载失败，自动回退到 apt 软件源安装...${NC}"
-            sudo apt-get install sing-box=1.12.* -yq || sudo apt-get install sing-box -yq
+            $SUDO apt-get install sing-box=1.12.* -yq || $SUDO apt-get install sing-box -yq
         fi
     fi
 else
     echo "正在从 apt 软件源安装 sing-box 1.12.x 稳定版..."
     # 安装 1.12.x 版本
-    sudo apt-get install sing-box=1.12.* -yq || sudo apt-get install sing-box -yq
+    $SUDO apt-get install sing-box=1.12.* -yq || $SUDO apt-get install sing-box -yq
 fi
 
 # 锁定版本，避免被 apt upgrade 自动升级掉
-sudo apt-mark hold sing-box 2>/dev/null
+$SUDO apt-mark hold sing-box 2>/dev/null || true
 
 # 如果以后想解锁升级，运行：
 # sudo apt-mark unhold sing-box
@@ -90,8 +135,7 @@ sudo apt-mark hold sing-box 2>/dev/null
 # 3. 服务器网络与内核优化 (可选)
 if [[ "$OPTIMIZE_CHOICE" =~ ^[Yy]$ || "$OPTIMIZE_CHOICE" == "" ]]; then
     echo -e "\n${CYAN}正在应用系统网络与内核优化...${NC}"
-    if ! grep -q "net.core.default_qdisc=fq" /etc/sysctl.conf 2>/dev/null; then
-        sudo tee -a /etc/sysctl.conf > /dev/null << 'EOF'
+    $SUDO tee /etc/sysctl.d/99-sing-box-optimize.conf > /dev/null << 'EOF'
 
 # === 通用代理服务端高并发优化 ===
 net.core.default_qdisc=fq
@@ -109,30 +153,27 @@ net.ipv4.tcp_mtu_probing=1
 net.ipv4.tcp_syncookies=1
 net.ipv4.ip_local_port_range=1024 65535
 EOF
-    fi
-    sudo sysctl -p > /dev/null 2>&1
-    
-    if ! grep -q "1048576" /etc/security/limits.conf 2>/dev/null; then
-        sudo mkdir -p /etc/security
-        sudo touch /etc/security/limits.conf
-        sudo tee -a /etc/security/limits.conf > /dev/null << 'EOF'
+
+    $SUDO sysctl --system > /dev/null
+
+    $SUDO mkdir -p /etc/security/limits.d
+    $SUDO tee /etc/security/limits.d/99-sing-box.conf > /dev/null << 'EOF'
 
 * soft nofile 1048576
 * hard nofile 1048576
 root soft nofile 1048576
 root hard nofile 1048576
 EOF
-    fi
-    sudo systemctl daemon-reload >/dev/null 2>&1
+    $SUDO systemctl daemon-reload >/dev/null 2>&1 || true
     echo -e "${GREEN}✓ 内核参数与文件描述符(ulimit)优化完成！${NC}"
 fi
 
 # 4. 自动创建用户并设置权限
 if ! id sing-box &>/dev/null; then
-    sudo useradd --system --no-create-home --shell /usr/sbin/nologin sing-box
+    $SUDO useradd --system --no-create-home --shell /usr/sbin/nologin sing-box
 fi
-sudo mkdir -p /var/lib/sing-box /etc/sing-box
-sudo chown -R sing-box:sing-box /var/lib/sing-box /etc/sing-box
+$SUDO mkdir -p /var/lib/sing-box /etc/sing-box
+$SUDO chown -R sing-box:sing-box /var/lib/sing-box /etc/sing-box
 
 # 5. 自动生成 Reality 密钥对、UUID 和参数
 UUID=$(sing-box generate uuid)
@@ -140,8 +181,9 @@ KEYS=$(sing-box generate reality-keypair)
 PRIVATE_KEY=$(echo "$KEYS" | grep "PrivateKey" | awk -F': ' '{print $2}')
 PUBLIC_KEY=$(echo "$KEYS" | grep "PublicKey" | awk -F': ' '{print $2}')
 SHORT_ID=$(openssl rand -hex 8)
-SERVER_IP=$(curl -4 -s ifconfig.me -m 5)
+SERVER_IP="$(get_public_ip)"
 SERVER_IP6=$(curl -6 -s ifconfig.me -m 5 2>/dev/null || echo "")
+[ -n "$SERVER_IP" ] || die "无法获取服务器 IPv4 地址，请检查网络后重试。"
 if [ "$PROTO_CHOICE" != "2" ]; then
     SOCKS_USER=$(openssl rand -hex 4)
     SOCKS_PASS="$UUID"
@@ -158,7 +200,7 @@ SNI_LIST=(
 SNI=${SNI_LIST[$RANDOM % ${#SNI_LIST[@]}]}
 
 # 6. 自动写入 JSON 配置文件
-cat <<EOF | sudo tee /etc/sing-box/config.json > /dev/null
+cat <<EOF | $SUDO tee /etc/sing-box/config.json > /dev/null
 {
   "log": { "level": "info", "timestamp": true },
   "dns": {
@@ -199,10 +241,12 @@ cat <<EOF | sudo tee /etc/sing-box/config.json > /dev/null
     }"; fi)
   ],
   "outbounds": [
+    { "tag": "阻断", "type": "block" },
     { "tag": "直接出站", "type": "direct" }
   ],
   "route": {
     "rules": [
+      { "protocol": "bittorrent", "outbound": "阻断" },
       { "ip_is_private": true, "outbound": "直接出站" },
       { "rule_set": ["geosite-cn", "geoip-cn"], "outbound": "直接出站" }
     ],
@@ -222,9 +266,9 @@ cat <<EOF | sudo tee /etc/sing-box/config.json > /dev/null
 EOF
 
 # 7. 自动格式化、校验并启动
-sudo sing-box format -w -c /etc/sing-box/config.json
-if sudo sing-box check -c /etc/sing-box/config.json; then
-    sudo systemctl enable --now sing-box
+$SUDO sing-box format -w -c /etc/sing-box/config.json
+if $SUDO sing-box check -c /etc/sing-box/config.json; then
+    $SUDO systemctl enable --now sing-box
     
     # 8. 自动生成分享链接
     VLESS_LINK="vless://${UUID}@${SERVER_IP}:${VLESS_PORT}?type=tcp&encryption=none&security=reality&pbk=${PUBLIC_KEY}&fp=chrome&sni=${SNI}&sid=${SHORT_ID}&flow=xtls-rprx-vision#Auto_Reality"
