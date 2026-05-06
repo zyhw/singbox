@@ -17,6 +17,23 @@ is_valid_port() {
     [[ "$1" =~ ^[0-9]+$ ]] && [ "$1" -ge 1 ] && [ "$1" -le 65535 ]
 }
 
+is_port_in_use() {
+    local port="$1"
+    ss -H -ltn 2>/dev/null | awk '{print $4}' | grep -Eq "[:.]${port}$"
+}
+
+find_next_free_port() {
+    local port="$1"
+    while [ "$port" -le 65535 ]; do
+        if ! is_port_in_use "$port"; then
+            echo "$port"
+            return 0
+        fi
+        port=$((port + 1))
+    done
+    return 1
+}
+
 get_latest_apt_112_version() {
     apt-cache madison sing-box 2>/dev/null \
         | awk '{print $3}' \
@@ -73,10 +90,23 @@ fi
 read -p "请输入 VLESS 端口 [默认: 443]: " VLESS_PORT
 VLESS_PORT=${VLESS_PORT:-443}
 is_valid_port "$VLESS_PORT" || die "VLESS 端口无效: $VLESS_PORT"
+ORIG_VLESS_PORT="$VLESS_PORT"
+VLESS_PORT="$(find_next_free_port "$VLESS_PORT")" || die "未找到可用的 VLESS 端口。"
+if [ "$VLESS_PORT" != "$ORIG_VLESS_PORT" ]; then
+    echo -e "${YELLOW}VLESS 端口 ${ORIG_VLESS_PORT} 已被占用，自动调整为 ${VLESS_PORT}${NC}"
+fi
 if [ "$PROTO_CHOICE" != "2" ]; then
     read -p "请输入 SOCKS5 端口 [默认: 1080]: " SOCKS_PORT
     SOCKS_PORT=${SOCKS_PORT:-1080}
     is_valid_port "$SOCKS_PORT" || die "SOCKS5 端口无效: $SOCKS_PORT"
+    ORIG_SOCKS_PORT="$SOCKS_PORT"
+    if [ "$SOCKS_PORT" -eq "$VLESS_PORT" ]; then
+        SOCKS_PORT=$((SOCKS_PORT + 1))
+    fi
+    SOCKS_PORT="$(find_next_free_port "$SOCKS_PORT")" || die "未找到可用的 SOCKS5 端口。"
+    if [ "$SOCKS_PORT" != "$ORIG_SOCKS_PORT" ]; then
+        echo -e "${YELLOW}SOCKS5 端口 ${ORIG_SOCKS_PORT} 已冲突或被占用，自动调整为 ${SOCKS_PORT}${NC}"
+    fi
 fi
 
 echo -e "\n请选择 sing-box 安装方式:"

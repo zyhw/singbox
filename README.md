@@ -10,6 +10,7 @@ bash <(curl -sL "https://raw.githubusercontent.com/zyhw/singbox/refs/heads/main/
 
 > The installer validates port inputs, supports both root/sudo execution, and aborts safely on critical errors.
 > It now enforces exact `1.12.x` apt version resolution, validates generated Reality keys/UUID, and stores output credentials with `0600` permissions.
+> If a requested port is already in use (or conflicts between VLESS/SOCKS), the installer auto-increments (`+1`) until a free port is found.
 
 ## One-click Upgrade
 
@@ -53,3 +54,4 @@ bash <(curl -sL "https://raw.githubusercontent.com/zyhw/singbox/refs/heads/main/
 - Deep kernel and network optimization support (BBR, ulimit, TCP/UDP buffers, network backlog queues)
 - Optional post-deploy SNI TLS 1.3 handshake check with warning output
 - Auto-add UFW allow rules for selected ports when UFW is active
+- Automatic port conflict handling (detect occupied ports and shift to next available port)
