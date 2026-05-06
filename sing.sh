@@ -17,6 +17,23 @@ is_valid_port() {
     [[ "$1" =~ ^[0-9]+$ ]] && [ "$1" -ge 1 ] && [ "$1" -le 65535 ]
 }
 
+get_latest_apt_112_version() {
+    apt-cache madison sing-box 2>/dev/null \
+        | awk '{print $3}' \
+        | grep -E '^1\.12\.[0-9]+' \
+        | head -n 1
+}
+
+install_sing_box_apt_112() {
+    local ver
+    ver="$(get_latest_apt_112_version)"
+    if [ -n "$ver" ]; then
+        $SUDO apt-get install -yq "sing-box=$ver"
+    else
+        die "apt 源中未找到 sing-box 1.12.x 版本。"
+    fi
+}
+
 get_public_ip() {
     local ip=""
     ip="$(curl -4 -fsS --max-time 5 ifconfig.me 2>/dev/null || true)"
@@ -35,6 +52,9 @@ else
     command -v sudo >/dev/null 2>&1 || die "需要 root 权限或 sudo。"
     SUDO="sudo"
 fi
+
+SOCKS_LINK6=""
+VLESS_LINK6=""
 
 echo -e "${CYAN}正在开始 sing-box 全自动部署...${NC}"
 
@@ -99,14 +119,14 @@ $SUDO apt-get update -qq
 if [ "$INSTALL_CHOICE" == "2" ]; then
     echo "正在从 GitHub 获取最新的 sing-box 1.12.x 版本..."
     ARCH=$(dpkg --print-architecture)
-    GITHUB_LATEST="$(curl -fsSL "https://api.github.com/repos/SagerNet/sing-box/tags?per_page=100" \
-        | jq -r '.[].name' \
+    GITHUB_LATEST="$(curl -fsSL "https://api.github.com/repos/SagerNet/sing-box/releases?per_page=100" \
+        | jq -r '.[].tag_name' \
         | sed -n 's/^v\(1\.12\.[0-9]\+\)$/\1/p' \
         | sort -V \
         | tail -n 1 || true)"
     if [ -z "$GITHUB_LATEST" ]; then
         echo -e "${RED}无法从 GitHub 获取最新版本，自动回退到 apt 软件源安装...${NC}"
-        $SUDO apt-get install sing-box=1.12.* -yq || $SUDO apt-get install sing-box -yq
+        install_sing_box_apt_112
     else
         DOWNLOAD_URL="https://github.com/SagerNet/sing-box/releases/download/v${GITHUB_LATEST}/sing-box_${GITHUB_LATEST}_linux_${ARCH}.deb"
         FILE_NAME="/tmp/sing-box_${GITHUB_LATEST}_linux_${ARCH}.deb"
@@ -116,13 +136,12 @@ if [ "$INSTALL_CHOICE" == "2" ]; then
             rm -f "$FILE_NAME"
         else
             echo -e "${RED}包下载失败，自动回退到 apt 软件源安装...${NC}"
-            $SUDO apt-get install sing-box=1.12.* -yq || $SUDO apt-get install sing-box -yq
+            install_sing_box_apt_112
         fi
     fi
 else
     echo "正在从 apt 软件源安装 sing-box 1.12.x 稳定版..."
-    # 安装 1.12.x 版本
-    $SUDO apt-get install sing-box=1.12.* -yq || $SUDO apt-get install sing-box -yq
+    install_sing_box_apt_112
 fi
 
 # 锁定版本，避免被 apt upgrade 自动升级掉
@@ -164,7 +183,6 @@ EOF
 root soft nofile 1048576
 root hard nofile 1048576
 EOF
-    $SUDO systemctl daemon-reload >/dev/null 2>&1 || true
     echo -e "${GREEN}✓ 内核参数与文件描述符(ulimit)优化完成！${NC}"
 fi
 
@@ -180,6 +198,9 @@ UUID=$(sing-box generate uuid)
 KEYS=$(sing-box generate reality-keypair)
 PRIVATE_KEY=$(echo "$KEYS" | grep "PrivateKey" | awk -F': ' '{print $2}')
 PUBLIC_KEY=$(echo "$KEYS" | grep "PublicKey" | awk -F': ' '{print $2}')
+[ -n "$UUID" ] || die "UUID 生成失败。"
+[ -n "$PRIVATE_KEY" ] || die "Reality 私钥为空，密钥对生成失败。"
+[ -n "$PUBLIC_KEY" ] || die "Reality 公钥为空，密钥对生成失败。"
 SHORT_ID=$(openssl rand -hex 8)
 SERVER_IP="$(get_public_ip)"
 SERVER_IP6=$(curl -6 -s ifconfig.me -m 5 2>/dev/null || echo "")
@@ -235,7 +256,7 @@ cat <<EOF | $SUDO tee /etc/sing-box/config.json > /dev/null
     {
       \"tag\": \"SOCKS5-Proxy\",
       \"type\": \"socks\",
-      \"listen\": "::",
+      \"listen\": \"::\",
       \"listen_port\": $SOCKS_PORT,
       \"users\": [ { \"username\": \"$SOCKS_USER\", \"password\": \"$SOCKS_PASS\" } ]
     }"; fi)
@@ -268,6 +289,14 @@ EOF
 # 7. 自动格式化、校验并启动
 $SUDO sing-box format -w -c /etc/sing-box/config.json
 if $SUDO sing-box check -c /etc/sing-box/config.json; then
+    if [[ "$OPTIMIZE_CHOICE" =~ ^[Yy]$ || "$OPTIMIZE_CHOICE" == "" ]]; then
+        $SUDO mkdir -p /etc/systemd/system/sing-box.service.d
+        $SUDO tee /etc/systemd/system/sing-box.service.d/limits.conf > /dev/null << 'EOF'
+[Service]
+LimitNOFILE=1048576
+EOF
+    fi
+    $SUDO systemctl daemon-reload >/dev/null 2>&1 || true
     $SUDO systemctl enable --now sing-box
     
     # 8. 自动生成分享链接
@@ -279,10 +308,10 @@ if $SUDO sing-box check -c /etc/sing-box/config.json; then
     # 保存到文件
     if [ "$PROTO_CHOICE" != "2" ]; then
         SOCKS_LINK="socks5://${SOCKS_USER}:${SOCKS_PASS}@${SERVER_IP}:${SOCKS_PORT}"
-        SOCKS_LINK6=""
         if [ -n "$SERVER_IP6" ]; then
             SOCKS_LINK6="socks5://${SOCKS_USER}:${SOCKS_PASS}@[${SERVER_IP6}]:${SOCKS_PORT}"
         fi
+        install -m 600 /dev/null ~/sing-box.txt
         cat > ~/sing-box.txt <<EOL
 ==================== VLESS Reality (IPv4) ====================
 $VLESS_LINK
@@ -293,12 +322,25 @@ $([ -n "$SERVER_IP6" ] && echo -e "\n==================== SOCKS5 代理 (IPv6) =
 ==============================================================
 EOL
     else
+        install -m 600 /dev/null ~/sing-box.txt
         cat > ~/sing-box.txt <<EOL
 ==================== VLESS Reality (IPv4) ====================
 $VLESS_LINK
 $([ -n "$SERVER_IP6" ] && echo -e "\n==================== VLESS Reality (IPv6) ====================\n$VLESS_LINK6")
 ==============================================================
 EOL
+    fi
+
+    if ! openssl s_client -connect "${SNI}:443" -tls1_3 </dev/null 2>/dev/null | grep -q "TLSv1.3"; then
+        echo -e "${YELLOW}警告: 当前 SNI($SNI) 可能不支持 TLS 1.3，建议更换后重试。${NC}"
+    fi
+
+    if command -v ufw >/dev/null 2>&1 && $SUDO ufw status | grep -q "Status: active"; then
+        $SUDO ufw allow "${VLESS_PORT}/tcp" >/dev/null 2>&1 || true
+        if [ "$PROTO_CHOICE" != "2" ]; then
+            $SUDO ufw allow "${SOCKS_PORT}/tcp" >/dev/null 2>&1 || true
+        fi
+        echo -e "${GREEN}✓ UFW 防火墙规则已自动添加${NC}"
     fi
 
     # 打印输出

@@ -9,6 +9,7 @@ bash <(curl -sL "https://raw.githubusercontent.com/zyhw/singbox/refs/heads/main/
 ```
 
 > The installer validates port inputs, supports both root/sudo execution, and aborts safely on critical errors.
+> It now enforces exact `1.12.x` apt version resolution, validates generated Reality keys/UUID, and stores output credentials with `0600` permissions.
 
 ## One-click Upgrade
 
@@ -33,6 +34,11 @@ bash <(curl -sL "https://raw.githubusercontent.com/zyhw/singbox/refs/heads/main/
 > The optimization script writes persistent drop-in files:
 > - `/etc/sysctl.d/99-sing-box-optimize.conf`
 > - `/etc/security/limits.d/99-sing-box.conf`
+>
+> During one-click installation (when optimization is enabled), the script also writes:
+> - `/etc/systemd/system/sing-box.service.d/limits.conf`
+>
+> This ensures `LimitNOFILE=1048576` is applied to the `sing-box` systemd service (not only PAM sessions).
 
 ## Features
 - Automatically install sing-box 1.12.x stable version (version-locked to prevent accidental upgrades)
@@ -42,5 +48,8 @@ bash <(curl -sL "https://raw.githubusercontent.com/zyhw/singbox/refs/heads/main/
 - Built-in BitTorrent protocol blocking rule (`protocol: bittorrent -> outbound: block`)
 - Reusable upgrade script supporting specific versions or wildcard upgrades
 - Interactive menus for protocol and installation method selection (official apt source or latest 1.12.x package from GitHub Releases)
-- Intelligent fallback to apt installation if GitHub retrieval/download fails
+- GitHub install path uses Releases API tag resolution for stable `v1.12.x` selection
+- Intelligent fallback to exact apt `1.12.x` installation if GitHub retrieval/download fails
 - Deep kernel and network optimization support (BBR, ulimit, TCP/UDP buffers, network backlog queues)
+- Optional post-deploy SNI TLS 1.3 handshake check with warning output
+- Auto-add UFW allow rules for selected ports when UFW is active
