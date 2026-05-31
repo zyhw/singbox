@@ -26,20 +26,25 @@ bash <(curl -sL "https://raw.githubusercontent.com/zyhw/singbox/refs/heads/main/
 
 ## One-click Optimization (Kernel & Network)
 
-The one-click installation script already includes optimization options during setup. If you have an existing server and only want to add network and kernel optimizations (BBR, increased concurrent connections, expanded TCP/UDP buffers), you can run this command separately (no reinstallation required):
+The one-click installation script already includes optimization options during setup. If you have an existing server and only want to add network and kernel optimizations (BBR, queue tuning, and memory-aware TCP/UDP buffers), you can run this command separately (no reinstallation required):
 
 ```bash
 bash <(curl -sL "https://raw.githubusercontent.com/zyhw/singbox/refs/heads/main/optimize.sh")
 ```
 
+Rollback command:
+
+```bash
+bash <(curl -sL "https://raw.githubusercontent.com/zyhw/singbox/refs/heads/main/optimize.sh") rollback
+```
+
 > The optimization script writes persistent drop-in files:
 > - `/etc/sysctl.d/99-sing-box-optimize.conf`
 > - `/etc/security/limits.d/99-sing-box.conf`
->
-> During one-click installation (when optimization is enabled), the script also writes:
 > - `/etc/systemd/system/sing-box.service.d/limits.conf`
 >
-> This ensures `LimitNOFILE=1048576` is applied to the `sing-box` systemd service (not only PAM sessions).
+> It applies a conservative profile with dynamic buffer sizing (5% of RAM, clamped to 16MB-64MB), plus stable low-risk additions such as `tcp_max_syn_backlog`, `udp_rmem_min/udp_wmem_min`, `tcp_notsent_lowat`, and `tcp_slow_start_after_idle`.
+> `LimitNOFILE=1048576` is applied to the `sing-box` systemd service (not only PAM sessions).
 
 ## Features
 - Automatically install sing-box 1.12.x stable version (version-locked to prevent accidental upgrades)
@@ -52,6 +57,7 @@ bash <(curl -sL "https://raw.githubusercontent.com/zyhw/singbox/refs/heads/main/
 - GitHub install path uses Releases API tag resolution for stable `v1.12.x` selection
 - Intelligent fallback to exact apt `1.12.x` installation if GitHub retrieval/download fails
 - Deep kernel and network optimization support (BBR, ulimit, TCP/UDP buffers, network backlog queues)
+- Conservative memory-aware optimization profile with rollback support
 - Optional post-deploy SNI TLS 1.3 handshake check with warning output
 - Auto-add UFW allow rules for selected ports when UFW is active
 - Automatic port conflict handling (detect occupied ports and shift to next available port)
