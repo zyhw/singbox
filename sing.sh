@@ -184,19 +184,38 @@ $SUDO apt-mark hold sing-box 2>/dev/null || true
 # 3. 服务器网络与内核优化 (可选)
 if [[ "$OPTIMIZE_CHOICE" =~ ^[Yy]$ || "$OPTIMIZE_CHOICE" == "" ]]; then
     echo -e "\n${CYAN}正在应用系统网络与内核优化...${NC}"
-    $SUDO tee /etc/sysctl.d/99-sing-box-optimize.conf > /dev/null << 'EOF'
+    $SUDO modprobe tcp_bbr 2>/dev/null || true
+    MEM_TOTAL_KB="$(awk '/MemTotal/ {print $2}' /proc/meminfo)"
+    BUF_BYTES=$((MEM_TOTAL_KB * 5 / 100 * 1024))
+    if [ "$BUF_BYTES" -lt 16777216 ]; then
+        BUF_BYTES=16777216
+    fi
+    if [ "$BUF_BYTES" -gt 67108864 ]; then
+        BUF_BYTES=67108864
+    fi
+    TCP_BUF_MAX=$((BUF_BYTES / 2))
+    if [ "$TCP_BUF_MAX" -lt 8388608 ]; then
+        TCP_BUF_MAX=8388608
+    fi
+
+    $SUDO tee /etc/sysctl.d/99-sing-box-optimize.conf > /dev/null << EOF
 
 # === 通用代理服务端高并发优化 ===
 net.core.default_qdisc=fq
 net.ipv4.tcp_congestion_control=bbr
 net.core.somaxconn=4096
 net.core.netdev_max_backlog=16384
-net.core.rmem_default=26214400
-net.core.rmem_max=67108864
-net.core.wmem_default=26214400
-net.core.wmem_max=67108864
-net.ipv4.tcp_rmem=4096 87380 33554432
-net.ipv4.tcp_wmem=4096 65536 33554432
+net.ipv4.tcp_max_syn_backlog=16384
+net.core.rmem_default=2097152
+net.core.rmem_max=${BUF_BYTES}
+net.core.wmem_default=2097152
+net.core.wmem_max=${BUF_BYTES}
+net.ipv4.tcp_rmem=4096 87380 ${TCP_BUF_MAX}
+net.ipv4.tcp_wmem=4096 65536 ${TCP_BUF_MAX}
+net.ipv4.udp_rmem_min=16384
+net.ipv4.udp_wmem_min=16384
+net.ipv4.tcp_notsent_lowat=16384
+net.ipv4.tcp_slow_start_after_idle=0
 net.ipv4.tcp_fastopen=3
 net.ipv4.tcp_mtu_probing=1
 net.ipv4.tcp_syncookies=1
