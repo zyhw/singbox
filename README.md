@@ -66,3 +66,36 @@ bash <(curl -sL "https://raw.githubusercontent.com/zyhw/singbox/refs/heads/main/
 - Optional post-deploy SNI TLS 1.3 handshake check with warning output
 - Auto-add UFW allow rules for selected ports when UFW is active
 - Automatic port conflict handling (detect occupied ports and shift to next available port)
+
+## Service Management
+
+Basic `systemctl` commands for day-to-day management:
+
+```bash
+# View service status
+sudo systemctl status sing-box
+
+# Restart the service (after config changes)
+sudo systemctl restart sing-box
+
+# Stop the service
+sudo systemctl stop sing-box
+
+# Start the service
+sudo systemctl start sing-box
+
+# View real-time logs
+sudo journalctl -u sing-box -f
+
+# View recent logs (last 50 lines)
+sudo journalctl -u sing-box -n 50 --no-pager
+
+# Verify configuration syntax
+sudo sing-box check -c /etc/sing-box/config.json
+
+# Format configuration file
+sudo sing-box format -w -c /etc/sing-box/config.json
+
+# View version
+sing-box version
+```
