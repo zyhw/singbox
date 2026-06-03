@@ -11,6 +11,8 @@ bash <(curl -sL "https://raw.githubusercontent.com/zyhw/singbox/refs/heads/main/
 > The installer validates port inputs, supports both root/sudo execution, and aborts safely on critical errors.
 > It now enforces exact `1.12.x` apt version resolution, validates generated Reality keys/UUID, and stores output credentials with `0600` permissions.
 > If a requested port is already in use (or conflicts between VLESS/SOCKS), the installer auto-increments (`+1`) until a free port is found.
+> If the GitHub package download succeeds but `dpkg -i` fails, the script automatically falls back to apt installation.
+> SOCKS5 credentials are now independently generated (not shared with the VLESS UUID).
 
 ## One-click Upgrade
 
@@ -45,6 +47,9 @@ bash <(curl -sL "https://raw.githubusercontent.com/zyhw/singbox/refs/heads/main/
 >
 > It applies a conservative profile with dynamic buffer sizing (5% of RAM, clamped to 16MB-64MB), plus stable low-risk additions such as `tcp_max_syn_backlog`, `udp_rmem_min/udp_wmem_min`, `tcp_notsent_lowat`, and `tcp_slow_start_after_idle`.
 > `LimitNOFILE=1048576` is applied to the `sing-box` systemd service (not only PAM sessions).
+> It automatically detects container environments (LXC/Docker) and skips kernel parameter configuration where the host kernel is not writable.
+> Each sysctl key is probed before writing — unsupported parameters are silently skipped with a warning, avoiding hard failures.
+> The rollback path also restarts the sing-box service so the removed `LimitNOFILE` drop-in takes effect immediately.
 
 ## Features
 - Automatically install sing-box 1.12.x stable version (version-locked to prevent accidental upgrades)
