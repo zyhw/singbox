@@ -13,6 +13,20 @@ die() {
     exit 1
 }
 
+is_container() {
+    if command -v systemd-detect-virt >/dev/null 2>&1; then
+        local virt
+        virt=$(systemd-detect-virt --container || echo "none")
+        if [ "$virt" != "none" ]; then
+            return 0
+        fi
+    fi
+    if [ -f /.dockerenv ] || grep -q 'docker\|lxc' /proc/1/cgroup 2>/dev/null; then
+        return 0
+    fi
+    return 1
+}
+
 is_valid_port() {
     [[ "$1" =~ ^[0-9]+$ ]] && [ "$1" -ge 1 ] && [ "$1" -le 65535 ]
 }
@@ -37,8 +51,9 @@ find_next_free_port() {
 get_latest_apt_112_version() {
     apt-cache madison sing-box 2>/dev/null \
         | awk '{print $3}' \
-        | grep -E '^1\.12\.[0-9]+' \
-        | head -n 1
+        | grep -E '^1\.12\.[0-9]+([-+~].*)?$' \
+        | sort -V \
+        | tail -n 1
 }
 
 install_sing_box_apt_112() {
@@ -162,7 +177,11 @@ if [ "$INSTALL_CHOICE" == "2" ]; then
         FILE_NAME="/tmp/sing-box_${GITHUB_LATEST}_linux_${ARCH}.deb"
         echo "正在下载: ${DOWNLOAD_URL}"
         if curl -L --fail "$DOWNLOAD_URL" -o "$FILE_NAME"; then
-            $SUDO dpkg -i "$FILE_NAME"
+            $SUDO dpkg -i "$FILE_NAME" || {
+                echo -e "${YELLOW}dpkg 安装失败，自动清理并回退到 apt 软件源安装...${NC}"
+                rm -f "$FILE_NAME"
+                install_sing_box_apt_112
+            }
             rm -f "$FILE_NAME"
         else
             echo -e "${RED}包下载失败，自动回退到 apt 软件源安装...${NC}"
@@ -184,49 +203,64 @@ $SUDO apt-mark hold sing-box 2>/dev/null || true
 # 3. 服务器网络与内核优化 (可选)
 if [[ "$OPTIMIZE_CHOICE" =~ ^[Yy]$ || "$OPTIMIZE_CHOICE" == "" ]]; then
     echo -e "\n${CYAN}正在应用系统网络与内核优化...${NC}"
-    $SUDO modprobe tcp_bbr 2>/dev/null || true
-    MEM_TOTAL_KB="$(awk '/MemTotal/ {print $2}' /proc/meminfo)"
-    BUF_BYTES=$((MEM_TOTAL_KB * 5 / 100 * 1024))
-    if [ "$BUF_BYTES" -lt 16777216 ]; then
-        BUF_BYTES=16777216
-    fi
-    if [ "$BUF_BYTES" -gt 67108864 ]; then
-        BUF_BYTES=67108864
-    fi
-    TCP_BUF_MAX=$((BUF_BYTES / 2))
-    if [ "$TCP_BUF_MAX" -lt 8388608 ]; then
-        TCP_BUF_MAX=8388608
-    fi
+    if is_container; then
+        echo -e "${YELLOW}检测到处于容器环境 (LXC/Docker)，无法修改宿主机内核网络参数。${NC}"
+        echo -e "${YELLOW}已自动跳过内核网络优化参数配置。${NC}"
+        $SUDO rm -f /etc/sysctl.d/99-sing-box-optimize.conf
+    else
+        $SUDO modprobe tcp_bbr 2>/dev/null || true
+        MEM_TOTAL_KB="$(awk '/MemTotal/ {print $2}' /proc/meminfo)"
+        BUF_BYTES=$((MEM_TOTAL_KB * 5 / 100 * 1024))
+        [ "$BUF_BYTES" -lt 16777216 ] && BUF_BYTES=16777216
+        [ "$BUF_BYTES" -gt 67108864 ] && BUF_BYTES=67108864
+        TCP_BUF_MAX=$((BUF_BYTES / 2))
+        [ "$TCP_BUF_MAX" -lt 8388608 ] && TCP_BUF_MAX=8388608
 
-    $SUDO tee /etc/sysctl.d/99-sing-box-optimize.conf > /dev/null << EOF
+        sysctl_params=(
+            "net.core.default_qdisc=fq"
+            "net.ipv4.tcp_congestion_control=bbr"
+            "net.core.somaxconn=4096"
+            "net.core.netdev_max_backlog=16384"
+            "net.ipv4.tcp_max_syn_backlog=16384"
+            "net.core.rmem_max=${BUF_BYTES}"
+            "net.core.wmem_max=${BUF_BYTES}"
+            "net.ipv4.tcp_rmem=4096 87380 ${TCP_BUF_MAX}"
+            "net.ipv4.tcp_wmem=4096 65536 ${TCP_BUF_MAX}"
+            "net.ipv4.udp_rmem_min=16384"
+            "net.ipv4.udp_wmem_min=16384"
+            "net.ipv4.tcp_notsent_lowat=16384"
+            "net.ipv4.tcp_slow_start_after_idle=0"
+            "net.ipv4.tcp_fastopen=3"
+            "net.ipv4.tcp_mtu_probing=1"
+            "net.ipv4.tcp_syncookies=1"
+            "net.ipv4.ip_local_port_range=32768 65535"
+        )
 
-# === 通用代理服务端高并发优化 ===
-net.core.default_qdisc=fq
-net.ipv4.tcp_congestion_control=bbr
-net.core.somaxconn=4096
-net.core.netdev_max_backlog=16384
-net.ipv4.tcp_max_syn_backlog=16384
-net.core.rmem_default=2097152
-net.core.rmem_max=${BUF_BYTES}
-net.core.wmem_default=2097152
-net.core.wmem_max=${BUF_BYTES}
-net.ipv4.tcp_rmem=4096 87380 ${TCP_BUF_MAX}
-net.ipv4.tcp_wmem=4096 65536 ${TCP_BUF_MAX}
-net.ipv4.udp_rmem_min=16384
-net.ipv4.udp_wmem_min=16384
-net.ipv4.tcp_notsent_lowat=16384
-net.ipv4.tcp_slow_start_after_idle=0
-net.ipv4.tcp_fastopen=3
-net.ipv4.tcp_mtu_probing=1
-net.ipv4.tcp_syncookies=1
-net.ipv4.ip_local_port_range=1024 65535
-EOF
+        sysctl_content="# === 通用代理服务端高并发优化 ===\n"
 
-    $SUDO sysctl --system > /dev/null
+        for param in "${sysctl_params[@]}"; do
+            key="${param%%=*}"
+            val="${param#*=}"
+            if $SUDO sysctl "$key" >/dev/null 2>&1; then
+                sysctl_content+="${key}=${val}\n"
+            else
+                echo -e "${YELLOW}警告: 内核不支持参数 ${key}，已自动跳过。${NC}"
+            fi
+        done
+
+        echo -e "${sysctl_content}" | $SUDO tee /etc/sysctl.d/99-sing-box-optimize.conf > /dev/null
+
+        if $SUDO sysctl --system > /dev/null; then
+            echo -e "${GREEN}✓ sysctl 网络参数已生效。${NC}"
+        else
+            echo -e "${YELLOW}警告: sysctl 网络参数在应用时产生部分错误，已自动忽略。${NC}"
+        fi
+    fi
 
     $SUDO mkdir -p /etc/security/limits.d
     $SUDO tee /etc/security/limits.d/99-sing-box.conf > /dev/null << 'EOF'
 
+# proxy server: raise open file limit
 * soft nofile 1048576
 * hard nofile 1048576
 root soft nofile 1048576
@@ -256,7 +290,7 @@ SERVER_IP6=$(curl -6 -s ifconfig.me -m 5 2>/dev/null || echo "")
 [ -n "$SERVER_IP" ] || die "无法获取服务器 IPv4 地址，请检查网络后重试。"
 if [ "$PROTO_CHOICE" != "2" ]; then
     SOCKS_USER=$(openssl rand -hex 4)
-    SOCKS_PASS="$UUID"
+    SOCKS_PASS=$(openssl rand -hex 16)
 fi
 
 # SNI 伪装域名列表（美国服务器 + 中国访问友好）
