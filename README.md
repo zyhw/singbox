@@ -66,6 +66,7 @@ bash <(curl -sL "https://raw.githubusercontent.com/zyhw/singbox/refs/heads/main/
 - Optional post-deploy SNI TLS 1.3 handshake check with warning output
 - Auto-add UFW allow rules for selected ports when UFW is active
 - Automatic port conflict handling (detect occupied ports and shift to next available port)
+- Modernized JSON configuration template supporting sing-box 1.12.0+ and 1.14.0+ DNS and route specifications (no deprecation warnings)
 
 ## Service Management
 

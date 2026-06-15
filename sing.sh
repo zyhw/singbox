@@ -309,8 +309,8 @@ cat <<EOF | $SUDO tee /etc/sing-box/config.json > /dev/null
   "log": { "level": "info", "timestamp": true },
   "dns": {
     "servers": [
-      { "tag": "local", "address": "local" },
-      { "tag": "proxy", "address": "1.1.1.1" }
+      { "type": "local", "tag": "local" },
+      { "type": "udp", "tag": "proxy", "server": "1.1.1.1" }
     ],
     "rules": [
       { "rule_set": "geosite-cn", "server": "local" }
@@ -349,6 +349,10 @@ cat <<EOF | $SUDO tee /etc/sing-box/config.json > /dev/null
     { "tag": "直接出站", "type": "direct" }
   ],
   "route": {
+    "default_domain_resolver": {
+      "server": "local",
+      "strategy": "prefer_ipv4"
+    },
     "rules": [
       { "protocol": "bittorrent", "outbound": "阻断" },
       { "ip_is_private": true, "outbound": "直接出站" },
