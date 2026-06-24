@@ -164,7 +164,7 @@ $SUDO apt-get update -qq
 if [ "$INSTALL_CHOICE" == "2" ]; then
     echo "正在从 GitHub 获取最新的 sing-box 1.12.x 版本..."
     ARCH=$(dpkg --print-architecture)
-    GITHUB_LATEST="$(curl -fsSL "https://api.github.com/repos/SagerNet/sing-box/releases?per_page=100" \
+    GITHUB_LATEST="$(curl -fsSL --max-time 10 "https://api.github.com/repos/SagerNet/sing-box/releases?per_page=100" \
         | jq -r '.[].tag_name' \
         | sed -n 's/^v\(1\.12\.[0-9]\+\)$/\1/p' \
         | sort -V \
@@ -286,20 +286,23 @@ PUBLIC_KEY=$(echo "$KEYS" | grep "PublicKey" | awk -F': ' '{print $2}')
 [ -n "$PUBLIC_KEY" ] || die "Reality 公钥为空，密钥对生成失败。"
 SHORT_ID=$(openssl rand -hex 8)
 SERVER_IP="$(get_public_ip)"
-SERVER_IP6=$(curl -6 -s ifconfig.me -m 5 2>/dev/null || echo "")
+SERVER_IP6=""
+if ip -6 route show | grep -q "default"; then
+    SERVER_IP6=$(curl -6 -s ifconfig.me -m 5 2>/dev/null || echo "")
+fi
 [ -n "$SERVER_IP" ] || die "无法获取服务器 IPv4 地址，请检查网络后重试。"
 if [ "$PROTO_CHOICE" != "2" ]; then
     SOCKS_USER=$(openssl rand -hex 4)
     SOCKS_PASS=$(openssl rand -hex 16)
 fi
 
-# SNI 伪装域名列表（美国服务器 + 中国访问友好）
+# SNI 伪装域名列表（支持 TLS 1.3，证书链短且稳定，全球一致性好）
 SNI_LIST=(
-  "www.microsoft.com"
   "www.cloudflare.com"
-  "www.amd.com"
+  "speed.cloudflare.com"
+  "www.samsung.com"
   "www.nvidia.com"
-  "www.tesla.com"
+  "www.amd.com"
 )
 SNI=${SNI_LIST[$RANDOM % ${#SNI_LIST[@]}]}
 
