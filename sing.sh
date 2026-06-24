@@ -422,12 +422,62 @@ EOL
         echo -e "${YELLOW}警告: 当前 SNI($SNI) 可能不支持 TLS 1.3，建议更换后重试。${NC}"
     fi
 
+    # 1. 自动配置 UFW 防火墙
     if command -v ufw >/dev/null 2>&1 && $SUDO ufw status | grep -q "Status: active"; then
         $SUDO ufw allow "${VLESS_PORT}/tcp" >/dev/null 2>&1 || true
         if [ "$PROTO_CHOICE" != "2" ]; then
             $SUDO ufw allow "${SOCKS_PORT}/tcp" >/dev/null 2>&1 || true
         fi
         echo -e "${GREEN}✓ UFW 防火墙规则已自动添加${NC}"
+    fi
+
+    # 2. 自动配置 firewalld 防火墙
+    if command -v firewall-cmd >/dev/null 2>&1 && $SUDO firewall-cmd --state >/dev/null 2>&1; then
+        $SUDO firewall-cmd --zone=public --add-port="${VLESS_PORT}/tcp" --permanent >/dev/null 2>&1 || true
+        if [ "$PROTO_CHOICE" != "2" ]; then
+            $SUDO firewall-cmd --zone=public --add-port="${SOCKS_PORT}/tcp" --permanent >/dev/null 2>&1 || true
+        fi
+        $SUDO firewall-cmd --reload >/dev/null 2>&1 || true
+        echo -e "${GREEN}✓ Firewalld 防火墙规则已自动添加${NC}"
+    fi
+
+    # 3. 自动配置 iptables 与 ip6tables 防火墙
+    if command -v iptables >/dev/null 2>&1; then
+        local iptables_changed=0
+
+        # IPv4 放行
+        if ! $SUDO iptables -C INPUT -p tcp --dport "$VLESS_PORT" -j ACCEPT >/dev/null 2>&1; then
+            $SUDO iptables -I INPUT -p tcp --dport "$VLESS_PORT" -j ACCEPT >/dev/null 2>&1 && iptables_changed=1 || true
+        fi
+        if [ "$PROTO_CHOICE" != "2" ]; then
+            if ! $SUDO iptables -C INPUT -p tcp --dport "$SOCKS_PORT" -j ACCEPT >/dev/null 2>&1; then
+                $SUDO iptables -I INPUT -p tcp --dport "$SOCKS_PORT" -j ACCEPT >/dev/null 2>&1 && iptables_changed=1 || true
+            fi
+        fi
+
+        # IPv6 放行
+        if command -v ip6tables >/dev/null 2>&1; then
+            if ! $SUDO ip6tables -C INPUT -p tcp --dport "$VLESS_PORT" -j ACCEPT >/dev/null 2>&1; then
+                $SUDO ip6tables -I INPUT -p tcp --dport "$VLESS_PORT" -j ACCEPT >/dev/null 2>&1 && iptables_changed=1 || true
+            fi
+            if [ "$PROTO_CHOICE" != "2" ]; then
+                if ! $SUDO ip6tables -C INPUT -p tcp --dport "$SOCKS_PORT" -j ACCEPT >/dev/null 2>&1; then
+                    $SUDO ip6tables -I INPUT -p tcp --dport "$SOCKS_PORT" -j ACCEPT >/dev/null 2>&1 && iptables_changed=1 || true
+                fi
+            fi
+        fi
+
+        # 如果规则发生变更，尝试持久化保存
+        if [ "$iptables_changed" -eq 1 ]; then
+            if command -v netfilter-persistent >/dev/null 2>&1; then
+                $SUDO netfilter-persistent save >/dev/null 2>&1 || true
+            elif command -v service >/dev/null 2>&1 && $SUDO service iptables-persistent status >/dev/null 2>&1; then
+                $SUDO service iptables-persistent save >/dev/null 2>&1 || true
+            fi
+            echo -e "${GREEN}✓ iptables/ip6tables 防火墙规则已自动添加并保存${NC}"
+        else
+            echo -e "${GREEN}✓ iptables/ip6tables 防火墙规则已存在，无需重复添加${NC}"
+        fi
     fi
 
     # 打印输出
