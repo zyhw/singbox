@@ -47,7 +47,7 @@ if [ "$UPGRADE_CHOICE" == "2" ]; then
         GITHUB_LATEST=$(curl -fsSL --max-time 10 "https://api.github.com/repos/SagerNet/sing-box/tags?per_page=100" 2>/dev/null | grep -o "\"name\": \"v${PREFIX}\.[0-9]*\"" | grep -o "${PREFIX}\.[0-9]*" | sort -V | tail -n 1 || true)
         if [ -z "$GITHUB_LATEST" ]; then
             echo -e "${RED}无法从 GitHub 获取 ${TARGET_VERSION} 的最新版本，回退到 apt 升级...${NC}"
-            if $SUDO apt-get install "sing-box=${TARGET_VERSION}" -y --allow-downgrades; then
+            if $SUDO apt-get install "sing-box=${TARGET_VERSION}" -y --allow-downgrades --allow-change-held-packages; then
                 NEW_VERSION=$(sing-box version 2>/dev/null | head -1 | awk '{print $NF}')
                 echo -e "${GREEN}软件源升级成功: ${CURRENT_VERSION:-N/A} → ${NEW_VERSION}${NC}"
             else
@@ -81,7 +81,7 @@ if [ "$UPGRADE_CHOICE" == "2" ]; then
             fi
         else
             echo -e "${RED}下载失败，回退到 apt 升级...${NC}"
-            if $SUDO apt-get install "sing-box=${TARGET_VERSION}" -y --allow-downgrades; then
+            if $SUDO apt-get install "sing-box=${TARGET_VERSION}" -y --allow-downgrades --allow-change-held-packages; then
                 NEW_VERSION=$(sing-box version 2>/dev/null | head -1 | awk '{print $NF}')
                 echo -e "${GREEN}软件源升级成功: ${CURRENT_VERSION:-N/A} → ${NEW_VERSION}${NC}"
             else
@@ -93,7 +93,7 @@ if [ "$UPGRADE_CHOICE" == "2" ]; then
     fi
 else
     echo "正在从 apt 软件源升级 sing-box..."
-    if $SUDO apt-get install "sing-box=${TARGET_VERSION}" -y --allow-downgrades; then
+    if $SUDO apt-get install "sing-box=${TARGET_VERSION}" -y --allow-downgrades --allow-change-held-packages; then
         NEW_VERSION=$(sing-box version | head -1 | awk '{print $NF}')
         echo -e "${GREEN}软件源升级成功: ${CURRENT_VERSION:-N/A} → ${NEW_VERSION}${NC}"
     else

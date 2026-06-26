@@ -60,7 +60,7 @@ install_sing_box_apt_112() {
     local ver
     ver="$(get_latest_apt_112_version)"
     if [ -n "$ver" ]; then
-        $SUDO apt-get install -yq --allow-downgrades "sing-box=$ver"
+        $SUDO apt-get install -yq --allow-downgrades --allow-change-held-packages "sing-box=$ver"
     else
         die "apt 源中未找到 sing-box 1.12.x 版本。"
     fi
@@ -142,6 +142,7 @@ OPTIMIZE_CHOICE=${OPTIMIZE_CHOICE:-Y}
 # 1. 自动清理冲突版本 (解决 dpkg 报错)
 echo -e "\n正在检查并清理旧版本..."
 $SUDO systemctl stop sing-box &>/dev/null || true
+$SUDO apt-mark unhold sing-box sing-box-beta >/dev/null 2>&1 || true
 $SUDO apt-get remove --purge sing-box sing-box-beta -y &>/dev/null || true
 $SUDO apt-get autoremove -y &>/dev/null || true
 
