@@ -60,10 +60,28 @@ install_sing_box_apt_112() {
     local ver
     ver="$(get_latest_apt_112_version)"
     if [ -n "$ver" ]; then
-        $SUDO apt-get install -yq --allow-downgrades --allow-change-held-packages "sing-box=$ver"
+        $SUDO apt-mark unhold sing-box sing-box-beta >/dev/null 2>&1 || true
+        if ! $SUDO apt-get install -yq --allow-downgrades --allow-change-held-packages "sing-box=$ver"; then
+            $SUDO apt-mark unhold sing-box sing-box-beta >/dev/null 2>&1 || true
+            $SUDO apt-get install -yq --allow-downgrades --allow-change-held-packages "sing-box=$ver"
+        fi
     else
         die "apt 源中未找到 sing-box 1.12.x 版本。"
     fi
+}
+
+get_latest_github_112_version() {
+    local tmp_file
+    tmp_file="$(mktemp)"
+    if curl -fsSL --connect-timeout 5 --max-time 20 \
+        "https://api.github.com/repos/SagerNet/sing-box/releases?per_page=100" \
+        -o "$tmp_file"; then
+        jq -r '.[].tag_name' "$tmp_file" 2>/dev/null \
+            | sed -n 's/^v\(1\.12\.[0-9]\+\)$/\1/p' \
+            | sort -V \
+            | tail -n 1
+    fi
+    rm -f "$tmp_file"
 }
 
 get_public_ip() {
@@ -165,11 +183,7 @@ $SUDO apt-get update -qq
 if [ "$INSTALL_CHOICE" == "2" ]; then
     echo "正在从 GitHub 获取最新的 sing-box 1.12.x 版本..."
     ARCH=$(dpkg --print-architecture)
-    GITHUB_LATEST="$(curl -fsSL --max-time 10 "https://api.github.com/repos/SagerNet/sing-box/releases?per_page=100" \
-        | jq -r '.[].tag_name' \
-        | sed -n 's/^v\(1\.12\.[0-9]\+\)$/\1/p' \
-        | sort -V \
-        | tail -n 1 || true)"
+    GITHUB_LATEST="$(get_latest_github_112_version || true)"
     if [ -z "$GITHUB_LATEST" ]; then
         echo -e "${RED}无法从 GitHub 获取最新版本，自动回退到 apt 软件源安装...${NC}"
         install_sing_box_apt_112

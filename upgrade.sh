@@ -20,6 +20,53 @@ else
     SUDO="sudo"
 fi
 
+get_latest_apt_112_version() {
+    apt-cache madison sing-box 2>/dev/null \
+        | awk '{print $3}' \
+        | grep -E '^1\.12\.[0-9]+([-+~].*)?$' \
+        | sort -V \
+        | tail -n 1
+}
+
+install_sing_box_apt_112() {
+    local ver
+    ver="$(get_latest_apt_112_version)"
+    if [ -n "$ver" ]; then
+        $SUDO apt-mark unhold sing-box sing-box-beta >/dev/null 2>&1 || true
+        if ! $SUDO apt-get install -yq --allow-downgrades --allow-change-held-packages "sing-box=$ver"; then
+            $SUDO apt-mark unhold sing-box sing-box-beta >/dev/null 2>&1 || true
+            $SUDO apt-get install -yq --allow-downgrades --allow-change-held-packages "sing-box=$ver"
+        fi
+    else
+        echo -e "${RED}apt 源中未找到 sing-box 1.12.x 版本。${NC}" >&2
+        exit 1
+    fi
+}
+
+install_sing_box_apt_exact() {
+    local ver="$1"
+    $SUDO apt-mark unhold sing-box sing-box-beta >/dev/null 2>&1 || true
+    if ! $SUDO apt-get install "sing-box=${ver}" -y --allow-downgrades --allow-change-held-packages; then
+        $SUDO apt-mark unhold sing-box sing-box-beta >/dev/null 2>&1 || true
+        $SUDO apt-get install "sing-box=${ver}" -y --allow-downgrades --allow-change-held-packages
+    fi
+}
+
+get_latest_github_version_by_prefix() {
+    local prefix="$1"
+    local tmp_file
+    tmp_file="$(mktemp)"
+    if curl -fsSL --connect-timeout 5 --max-time 20 \
+        "https://api.github.com/repos/SagerNet/sing-box/releases?per_page=100" \
+        -o "$tmp_file"; then
+        jq -r '.[].tag_name' "$tmp_file" 2>/dev/null \
+            | sed -n "s/^v\\(${prefix//./\\.}\\.[0-9]\\+\\)$/\\1/p" \
+            | sort -V \
+            | tail -n 1
+    fi
+    rm -f "$tmp_file"
+}
+
 CURRENT_VERSION=$(sing-box version 2>/dev/null | head -1 | awk '{print $NF}')
 echo -e "${CYAN}当前版本: ${CURRENT_VERSION:-未安装}${NC}"
 echo -e "${CYAN}目标版本: ${TARGET_VERSION}${NC}"
@@ -44,16 +91,22 @@ if [ "$UPGRADE_CHOICE" == "2" ]; then
     ARCH=$(dpkg --print-architecture)
     if [[ "$TARGET_VERSION" == *"*"* ]]; then
         PREFIX=$(echo "$TARGET_VERSION" | sed 's/\.\*$//')
-        GITHUB_LATEST=$(curl -fsSL --max-time 10 "https://api.github.com/repos/SagerNet/sing-box/tags?per_page=100" 2>/dev/null | grep -o "\"name\": \"v${PREFIX}\.[0-9]*\"" | grep -o "${PREFIX}\.[0-9]*" | sort -V | tail -n 1 || true)
+        GITHUB_LATEST="$(get_latest_github_version_by_prefix "$PREFIX" || true)"
         if [ -z "$GITHUB_LATEST" ]; then
             echo -e "${RED}无法从 GitHub 获取 ${TARGET_VERSION} 的最新版本，回退到 apt 升级...${NC}"
-            if $SUDO apt-get install "sing-box=${TARGET_VERSION}" -y --allow-downgrades --allow-change-held-packages; then
+            if [[ "$TARGET_VERSION" == "1.12.*" ]]; then
+                install_sing_box_apt_112
                 NEW_VERSION=$(sing-box version 2>/dev/null | head -1 | awk '{print $NF}')
                 echo -e "${GREEN}软件源升级成功: ${CURRENT_VERSION:-N/A} → ${NEW_VERSION}${NC}"
             else
-                echo -e "${RED}软件源中未找到指定版本或升级失败。${NC}"
-                $SUDO apt-mark hold sing-box 2>/dev/null || true
-                exit 1
+                if $SUDO apt-get install "sing-box=${TARGET_VERSION}" -y --allow-downgrades --allow-change-held-packages; then
+                    NEW_VERSION=$(sing-box version 2>/dev/null | head -1 | awk '{print $NF}')
+                    echo -e "${GREEN}软件源升级成功: ${CURRENT_VERSION:-N/A} → ${NEW_VERSION}${NC}"
+                else
+                    echo -e "${RED}软件源中未找到指定版本或升级失败。${NC}"
+                    $SUDO apt-mark hold sing-box 2>/dev/null || true
+                    exit 1
+                fi
             fi
             FETCH_VERSION=""
         else
@@ -75,31 +128,48 @@ if [ "$UPGRADE_CHOICE" == "2" ]; then
                 rm -f "$FILE_NAME"
             else
                 echo -e "${RED}dpkg 安装失败。${NC}"
-                $SUDO apt-mark hold sing-box 2>/dev/null || true
                 rm -f "$FILE_NAME"
-                exit 1
+                if [[ "$TARGET_VERSION" == *"*"* ]]; then
+                    install_sing_box_apt_112
+                else
+                    install_sing_box_apt_exact "$TARGET_VERSION"
+                fi
+                NEW_VERSION=$(sing-box version 2>/dev/null | head -1 | awk '{print $NF}')
+                echo -e "${GREEN}软件源升级成功: ${CURRENT_VERSION:-N/A} → ${NEW_VERSION}${NC}"
             fi
         else
             echo -e "${RED}下载失败，回退到 apt 升级...${NC}"
-            if $SUDO apt-get install "sing-box=${TARGET_VERSION}" -y --allow-downgrades --allow-change-held-packages; then
+            if [[ "$TARGET_VERSION" == "1.12.*" ]]; then
+                install_sing_box_apt_112
                 NEW_VERSION=$(sing-box version 2>/dev/null | head -1 | awk '{print $NF}')
                 echo -e "${GREEN}软件源升级成功: ${CURRENT_VERSION:-N/A} → ${NEW_VERSION}${NC}"
             else
-                echo -e "${RED}软件源升级失败，请检查网络或版本号。${NC}"
-                $SUDO apt-mark hold sing-box 2>/dev/null || true
-                exit 1
+                if $SUDO apt-get install "sing-box=${TARGET_VERSION}" -y --allow-downgrades --allow-change-held-packages; then
+                    NEW_VERSION=$(sing-box version 2>/dev/null | head -1 | awk '{print $NF}')
+                    echo -e "${GREEN}软件源升级成功: ${CURRENT_VERSION:-N/A} → ${NEW_VERSION}${NC}"
+                else
+                    echo -e "${RED}软件源升级失败，请检查网络或版本号。${NC}"
+                    $SUDO apt-mark hold sing-box 2>/dev/null || true
+                    exit 1
+                fi
             fi
         fi
     fi
 else
     echo "正在从 apt 软件源升级 sing-box..."
-    if $SUDO apt-get install "sing-box=${TARGET_VERSION}" -y --allow-downgrades --allow-change-held-packages; then
-        NEW_VERSION=$(sing-box version | head -1 | awk '{print $NF}')
+    if [[ "$TARGET_VERSION" == "1.12.*" ]]; then
+        install_sing_box_apt_112
+        NEW_VERSION=$(sing-box version 2>/dev/null | head -1 | awk '{print $NF}')
         echo -e "${GREEN}软件源升级成功: ${CURRENT_VERSION:-N/A} → ${NEW_VERSION}${NC}"
     else
-        echo -e "${RED}升级失败，请检查版本号是否正确。${NC}"
-        $SUDO apt-mark hold sing-box 2>/dev/null || true
-        exit 1
+        if $SUDO apt-get install "sing-box=${TARGET_VERSION}" -y --allow-downgrades --allow-change-held-packages; then
+            NEW_VERSION=$(sing-box version | head -1 | awk '{print $NF}')
+            echo -e "${GREEN}软件源升级成功: ${CURRENT_VERSION:-N/A} → ${NEW_VERSION}${NC}"
+        else
+            echo -e "${RED}升级失败，请检查版本号是否正确。${NC}"
+            $SUDO apt-mark hold sing-box 2>/dev/null || true
+            exit 1
+        fi
     fi
 fi
 
