@@ -446,7 +446,7 @@ EOL
 
     # 3. 自动配置 iptables 与 ip6tables 防火墙
     if command -v iptables >/dev/null 2>&1; then
-        local iptables_changed=0
+        iptables_changed=0
 
         # IPv4 放行
         if ! $SUDO iptables -C INPUT -p tcp --dport "$VLESS_PORT" -j ACCEPT >/dev/null 2>&1; then
