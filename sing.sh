@@ -60,7 +60,7 @@ install_sing_box_apt_112() {
     local ver
     ver="$(get_latest_apt_112_version)"
     if [ -n "$ver" ]; then
-        $SUDO apt-get install -yq "sing-box=$ver"
+        $SUDO apt-get install -yq --allow-downgrades "sing-box=$ver"
     else
         die "apt 源中未找到 sing-box 1.12.x 版本。"
     fi
