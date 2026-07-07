@@ -440,6 +440,8 @@ EOL
         echo -e "${YELLOW}警告: 当前 SNI($SNI) 可能不支持 TLS 1.3，建议更换后重试。${NC}"
     fi
 
+    firewall_configured=0
+
     # 1. 自动配置 UFW 防火墙
     if command -v ufw >/dev/null 2>&1 && $SUDO ufw status | grep -q "Status: active"; then
         $SUDO ufw allow "${VLESS_PORT}/tcp" >/dev/null 2>&1 || true
@@ -447,20 +449,22 @@ EOL
             $SUDO ufw allow "${SOCKS_PORT}/tcp" >/dev/null 2>&1 || true
         fi
         echo -e "${GREEN}✓ UFW 防火墙规则已自动添加${NC}"
+        firewall_configured=1
     fi
 
     # 2. 自动配置 firewalld 防火墙
-    if command -v firewall-cmd >/dev/null 2>&1 && $SUDO firewall-cmd --state >/dev/null 2>&1; then
+    if [ "$firewall_configured" -eq 0 ] && command -v firewall-cmd >/dev/null 2>&1 && $SUDO firewall-cmd --state >/dev/null 2>&1; then
         $SUDO firewall-cmd --zone=public --add-port="${VLESS_PORT}/tcp" --permanent >/dev/null 2>&1 || true
         if [ "$PROTO_CHOICE" != "2" ]; then
             $SUDO firewall-cmd --zone=public --add-port="${SOCKS_PORT}/tcp" --permanent >/dev/null 2>&1 || true
         fi
         $SUDO firewall-cmd --reload >/dev/null 2>&1 || true
         echo -e "${GREEN}✓ Firewalld 防火墙规则已自动添加${NC}"
+        firewall_configured=1
     fi
 
     # 3. 自动配置 iptables 与 ip6tables 防火墙
-    if command -v iptables >/dev/null 2>&1; then
+    if [ "$firewall_configured" -eq 0 ] && command -v iptables >/dev/null 2>&1; then
         iptables_changed=0
 
         # IPv4 放行
@@ -487,12 +491,37 @@ EOL
 
         # 如果规则发生变更，尝试持久化保存
         if [ "$iptables_changed" -eq 1 ]; then
-            if command -v netfilter-persistent >/dev/null 2>&1; then
-                $SUDO netfilter-persistent save >/dev/null 2>&1 || true
-            elif command -v service >/dev/null 2>&1 && $SUDO service iptables-persistent status >/dev/null 2>&1; then
-                $SUDO service iptables-persistent save >/dev/null 2>&1 || true
+            # 检测是否有保存工具，如果没有，尝试在主流发行版上自动静默安装
+            if ! command -v netfilter-persistent >/dev/null 2>&1; then
+                if command -v apt-get >/dev/null 2>&1; then
+                    echo "检测到未安装 netfilter-persistent，正在尝试自动安装以持久化防火墙规则..."
+                    echo iptables-persistent iptables-persistent/autosave_v4 boolean true | $SUDO debconf-set-selections >/dev/null 2>&1 || true
+                    echo iptables-persistent iptables-persistent/autosave_v6 boolean true | $SUDO debconf-set-selections >/dev/null 2>&1 || true
+                    $SUDO apt-get update -qq
+                    DEBIAN_FRONTEND=noninteractive $SUDO apt-get install -y iptables-persistent >/dev/null 2>&1 || true
+                elif command -v yum >/dev/null 2>&1 || command -v dnf >/dev/null 2>&1; then
+                    echo "检测到未安装 iptables-services，正在尝试自动安装以持久化防火墙规则..."
+                    $SUDO dnf install -y iptables-services >/dev/null 2>&1 || $SUDO yum install -y iptables-services >/dev/null 2>&1 || true
+                    $SUDO systemctl enable iptables >/dev/null 2>&1 || true
+                    $SUDO systemctl start iptables >/dev/null 2>&1 || true
+                fi
             fi
-            echo -e "${GREEN}✓ iptables/ip6tables 防火墙规则已自动添加并保存${NC}"
+
+            saved=0
+            if command -v netfilter-persistent >/dev/null 2>&1; then
+                $SUDO netfilter-persistent save >/dev/null 2>&1 && saved=1 || true
+            elif command -v service >/dev/null 2>&1 && $SUDO service iptables-persistent status >/dev/null 2>&1; then
+                $SUDO service iptables-persistent save >/dev/null 2>&1 && saved=1 || true
+            elif command -v systemctl >/dev/null 2>&1 && $SUDO systemctl is-active iptables >/dev/null 2>&1; then
+                $SUDO service iptables save >/dev/null 2>&1 && saved=1 || true
+            fi
+
+            if [ "$saved" -eq 1 ]; then
+                echo -e "${GREEN}✓ iptables/ip6tables 防火墙规则已自动添加并保存${NC}"
+            else
+                echo -e "${YELLOW}✓ iptables/ip6tables 防火墙规则已临时添加，但未持久化保存。${NC}"
+                echo -e "${YELLOW}提示: 重启后规则可能会失效。建议安装 iptables-persistent (Debian/Ubuntu) 或 iptables-services (CentOS/RHEL) 并手动保存规则。${NC}"
+            fi
         else
             echo -e "${GREEN}✓ iptables/ip6tables 防火墙规则已存在，无需重复添加${NC}"
         fi
