@@ -525,6 +525,61 @@ EOL
         else
             echo -e "${GREEN}✓ iptables/ip6tables 防火墙规则已存在，无需重复添加${NC}"
         fi
+
+        # 4. 同步到 1Panel 防火墙后台（如果检测到 1Panel）
+        if [ -f "/opt/1panel/db/agent.db" ] && [ -d "/opt/1panel/firewall" ]; then
+            echo "检测到系统安装了 1Panel 面板，正在同步放行端口到 1Panel 防火墙..."
+
+            # 1. 写入 1panel_basic.rules 规则文件
+            rules_file="/opt/1panel/firewall/1panel_basic.rules"
+            if [ -f "$rules_file" ]; then
+                if ! grep -q "dport ${VLESS_PORT} " "$rules_file"; then
+                    echo "-A 1PANEL_BASIC -p tcp -m tcp --dport ${VLESS_PORT} -j ACCEPT" >> "$rules_file"
+                fi
+                if [ "$PROTO_CHOICE" != "2" ]; then
+                    if ! grep -q "dport ${SOCKS_PORT} " "$rules_file"; then
+                        echo "-A 1PANEL_BASIC -p tcp -m tcp --dport ${SOCKS_PORT} -j ACCEPT" >> "$rules_file"
+                    fi
+                fi
+            fi
+
+            # 2. 写入 agent.db 数据库
+            db_file="/opt/1panel/db/agent.db"
+            
+            python3 -c "
+import sqlite3, datetime
+try:
+    conn = sqlite3.connect('$db_file')
+    cursor = conn.cursor()
+    now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    
+    # 写入 VLESS 端口
+    cursor.execute(\"SELECT COUNT(*) FROM firewalls WHERE port='${VLESS_PORT}'\")
+    if cursor.fetchone()[0] == 0:
+        cursor.execute('''
+        INSERT INTO firewalls (created_at, updated_at, type, port, address, chain, protocol, src_ip, src_port, dst_ip, dst_port, strategy, description)
+        VALUES (?, ?, 'port', '${VLESS_PORT}', '', 'INPUT', 'tcp', '', '', '', '', 'accept', 'sing-box VLESS Reality')
+        ''', (now, now))
+        
+    # 写入 SOCKS5 端口
+    if '${PROTO_CHOICE}' != '2':
+        cursor.execute(\"SELECT COUNT(*) FROM firewalls WHERE port='${SOCKS_PORT}'\")
+        if cursor.fetchone()[0] == 0:
+            cursor.execute('''
+            INSERT INTO firewalls (created_at, updated_at, type, port, address, chain, protocol, src_ip, src_port, dst_ip, dst_port, strategy, description)
+            VALUES (?, ?, 'port', '${SOCKS_PORT}', '', 'INPUT', 'tcp', '', '', '', '', 'accept', 'sing-box SOCKS5 Proxy')
+            ''', (now, now))
+            
+    conn.commit()
+    conn.close()
+except Exception as e:
+    print('1Panel DB sync warning:', e)
+" >/dev/null 2>&1 || true
+
+            # 重启 1panel-core 服务，刷新面板读取
+            $SUDO systemctl restart 1panel-core >/dev/null 2>&1 || true
+            echo -e "${GREEN}✓ 已同步放行端口至 1Panel 防火墙后台${NC}"
+        fi
     fi
 
     # 打印输出
