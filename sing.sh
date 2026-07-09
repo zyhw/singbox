@@ -48,6 +48,126 @@ find_next_free_port() {
     return 1
 }
 
+cleanup_old_firewall_rules() {
+    local port="$1"
+    [ -z "$port" ] && return 0
+    
+    # 1. UFW 清理
+    if command -v ufw >/dev/null 2>&1 && $SUDO ufw status | grep -q "Status: active"; then
+        $SUDO ufw delete allow "${port}/tcp" >/dev/null 2>&1 || true
+    fi
+    
+    # 2. Firewalld 清理
+    if command -v firewall-cmd >/dev/null 2>&1 && $SUDO firewall-cmd --state >/dev/null 2>&1; then
+        $SUDO firewall-cmd --zone=public --remove-port="${port}/tcp" --permanent >/dev/null 2>&1 || true
+        $SUDO firewall-cmd --reload >/dev/null 2>&1 || true
+    fi
+    
+    # 3. Iptables/Ip6tables 清理
+    local iptables_changed=0
+    if command -v iptables >/dev/null 2>&1; then
+        while $SUDO iptables -C INPUT -p tcp --dport "$port" -j ACCEPT >/dev/null 2>&1; do
+            $SUDO iptables -D INPUT -p tcp --dport "$port" -j ACCEPT >/dev/null 2>&1 && iptables_changed=1 || break
+        done
+    fi
+    if command -v ip6tables >/dev/null 2>&1; then
+        while $SUDO ip6tables -C INPUT -p tcp --dport "$port" -j ACCEPT >/dev/null 2>&1; do
+            $SUDO ip6tables -D INPUT -p tcp --dport "$port" -j ACCEPT >/dev/null 2>&1 && iptables_changed=1 || break
+        done
+    fi
+    if [ "$iptables_changed" -eq 1 ]; then
+        if command -v netfilter-persistent >/dev/null 2>&1; then
+            $SUDO netfilter-persistent save >/dev/null 2>&1 || true
+        elif command -v service >/dev/null 2>&1 && $SUDO service iptables-persistent status >/dev/null 2>&1; then
+            $SUDO service iptables-persistent save >/dev/null 2>&1 || true
+        elif command -v systemctl >/dev/null 2>&1 && $SUDO systemctl is-active iptables >/dev/null 2>&1; then
+            $SUDO service iptables save >/dev/null 2>&1 || true
+        fi
+    fi
+    
+    # 4. 1Panel 清理
+    if [ -f "/opt/1panel/db/agent.db" ] && [ -d "/opt/1panel/firewall" ]; then
+        local rules_file="/opt/1panel/firewall/1panel_basic.rules"
+        if [ -f "$rules_file" ]; then
+            $SUDO sed -i "/dport ${port} /d" "$rules_file" 2>/dev/null || true
+        fi
+        local db_file="/opt/1panel/db/agent.db"
+        $SUDO python3 -c "
+import sqlite3
+try:
+    conn = sqlite3.connect('$db_file')
+    cursor = conn.cursor()
+    cursor.execute(\"DELETE FROM firewalls WHERE port='${port}'\")
+    conn.commit()
+    conn.close()
+except Exception:
+    pass
+" >/dev/null 2>&1 || true
+        $SUDO systemctl restart 1panel-core >/dev/null 2>&1 || true
+    fi
+}
+
+show_firewall_summary() {
+    echo -e "\n${CYAN}================ 防火墙端口放行概览 ==================${NC}"
+    local fw_active="无活动防火墙"
+    
+    if command -v ufw >/dev/null 2>&1 && $SUDO ufw status | grep -q "Status: active"; then
+        fw_active="UFW (已启用)"
+        echo -e "系统防火墙: ${fw_active}"
+        echo -e "当前放行的 sing-box 端口规则:"
+        local pattern=""
+        if [ -n "${VLESS_PORT:-}" ]; then
+            pattern="${VLESS_PORT}"
+        fi
+        if [ -n "${SOCKS_PORT:-}" ]; then
+            if [ -n "$pattern" ]; then
+                pattern="${pattern}|${SOCKS_PORT}"
+            else
+                pattern="${SOCKS_PORT}"
+            fi
+        fi
+        if [ -n "$pattern" ]; then
+            $SUDO ufw status numbered | grep -E "(${pattern})" || echo "  未在 UFW 中找到对应规则"
+        else
+            echo "  未配置端口规则"
+        fi
+    elif command -v firewall-cmd >/dev/null 2>&1 && $SUDO firewall-cmd --state >/dev/null 2>&1; then
+        fw_active="Firewalld (已启用)"
+        echo -e "系统防火墙: ${fw_active}"
+        echo -e "当前开放的全部端口:"
+        local ports
+        ports=$($SUDO firewall-cmd --zone=public --list-ports 2>/dev/null || echo "")
+        echo -e "  已开放端口: ${ports:-无}"
+    elif command -v iptables >/dev/null 2>&1; then
+        fw_active="Iptables"
+        echo -e "系统防火墙: ${fw_active}"
+        echo -e "当前放行的 sing-box 端口规则:"
+        local pattern=""
+        if [ -n "${VLESS_PORT:-}" ]; then
+            pattern="${VLESS_PORT}"
+        fi
+        if [ -n "${SOCKS_PORT:-}" ]; then
+            if [ -n "$pattern" ]; then
+                pattern="${pattern}|${SOCKS_PORT}"
+            else
+                pattern="${SOCKS_PORT}"
+            fi
+        fi
+        if [ -n "$pattern" ]; then
+            $SUDO iptables -L INPUT -n --line-numbers | grep -E "dpt:(${pattern})" || echo "  未在 Iptables 中找到对应规则"
+        else
+            echo "  未配置端口规则"
+        fi
+    else
+        echo -e "系统防火墙: ${fw_active}"
+    fi
+    
+    if [ -f "/opt/1panel/db/agent.db" ]; then
+        echo -e "1Panel 防火墙状态: 已同步配置"
+    fi
+    echo -e "${CYAN}==================================================${NC}"
+}
+
 get_latest_apt_112_version() {
     apt-cache madison sing-box 2>/dev/null \
         | awk '{print $3}' \
@@ -103,6 +223,33 @@ else
     SUDO="sudo"
 fi
 
+# 检测旧配置文件并提取原有端口
+OLD_VLESS_PORT=""
+OLD_SOCKS_PORT=""
+if [ -f /etc/sing-box/config.json ]; then
+    if ! command -v jq >/dev/null 2>&1; then
+        if command -v apt-get >/dev/null 2>&1; then
+            $SUDO apt-get update -qq && $SUDO apt-get install -y jq >/dev/null 2>&1 || true
+        fi
+    fi
+    if command -v jq >/dev/null 2>&1; then
+        OLD_VLESS_PORT=$(jq -r '.inbounds[] | select(.type=="vless") | .listen_port' /etc/sing-box/config.json 2>/dev/null || true)
+        OLD_SOCKS_PORT=$(jq -r '.inbounds[] | select(.type=="socks") | .listen_port' /etc/sing-box/config.json 2>/dev/null || true)
+        
+        if ! [[ "$OLD_VLESS_PORT" =~ ^[0-9]+$ ]]; then
+            OLD_VLESS_PORT=""
+        fi
+        if ! [[ "$OLD_SOCKS_PORT" =~ ^[0-9]+$ ]]; then
+            OLD_SOCKS_PORT=""
+        fi
+    fi
+    
+    if $SUDO systemctl is-active sing-box >/dev/null 2>&1; then
+        echo -e "${YELLOW}检测到原有 sing-box 服务正在运行，正在停止以释放端口...${NC}"
+        $SUDO systemctl stop sing-box &>/dev/null || true
+    fi
+fi
+
 SOCKS_LINK6=""
 VLESS_LINK6=""
 
@@ -119,26 +266,104 @@ if [ "$PROTO_CHOICE" != "1" ] && [ "$PROTO_CHOICE" != "2" ]; then
     PROTO_CHOICE=1
 fi
 
-# 端口配置（可自定义，回车使用默认值）
-read -p "请输入 VLESS 端口 [默认: 443]: " VLESS_PORT
-VLESS_PORT=${VLESS_PORT:-443}
-is_valid_port "$VLESS_PORT" || die "VLESS 端口无效: $VLESS_PORT"
-ORIG_VLESS_PORT="$VLESS_PORT"
-VLESS_PORT="$(find_next_free_port "$VLESS_PORT")" || die "未找到可用的 VLESS 端口。"
-if [ "$VLESS_PORT" != "$ORIG_VLESS_PORT" ]; then
-    echo -e "${YELLOW}VLESS 端口 ${ORIG_VLESS_PORT} 已被占用，自动调整为 ${VLESS_PORT}${NC}"
-fi
-if [ "$PROTO_CHOICE" != "2" ]; then
-    read -p "请输入 SOCKS5 端口 [默认: 1080]: " SOCKS_PORT
-    SOCKS_PORT=${SOCKS_PORT:-1080}
-    is_valid_port "$SOCKS_PORT" || die "SOCKS5 端口无效: $SOCKS_PORT"
-    ORIG_SOCKS_PORT="$SOCKS_PORT"
-    if [ "$SOCKS_PORT" -eq "$VLESS_PORT" ]; then
-        SOCKS_PORT=$((SOCKS_PORT + 1))
+# 端口配置
+PORT_CONFIGURED=0
+if [ -n "$OLD_VLESS_PORT" ]; then
+    echo -e "\n检测到原有 sing-box 端口配置:"
+    echo -e "  - VLESS 端口: ${OLD_VLESS_PORT}"
+    if [ -n "$OLD_SOCKS_PORT" ]; then
+        echo -e "  - SOCKS5 端口: ${OLD_SOCKS_PORT}"
     fi
-    SOCKS_PORT="$(find_next_free_port "$SOCKS_PORT")" || die "未找到可用的 SOCKS5 端口。"
-    if [ "$SOCKS_PORT" != "$ORIG_SOCKS_PORT" ]; then
-        echo -e "${YELLOW}SOCKS5 端口 ${ORIG_SOCKS_PORT} 已冲突或被占用，自动调整为 ${SOCKS_PORT}${NC}"
+    echo "请选择端口配置方式:"
+    echo "1. 沿用原有端口 (默认)"
+    echo "2. 在原有端口基础上更改一个随机数字 (添加 1-100 的随机偏移) 生成当前安装端口"
+    echo "3. 手动输入端口配置"
+    read -p "请输入选项 [1-3, 默认: 1]: " PORT_OPT
+    PORT_OPT=${PORT_OPT:-1}
+    
+    if [ "$PORT_OPT" == "1" ]; then
+        VLESS_PORT="$OLD_VLESS_PORT"
+        if [ -n "$OLD_SOCKS_PORT" ]; then
+            SOCKS_PORT="$OLD_SOCKS_PORT"
+        fi
+        PORT_CONFIGURED=1
+        echo -e "${GREEN}已选择沿用原有端口。${NC}"
+    elif [ "$PORT_OPT" == "2" ]; then
+        # 随机数字偏移
+        OFFSET=$((RANDOM % 100 + 1))
+        # 判定加还是减。默认加，如果超限则减
+        if [ $((OLD_VLESS_PORT + OFFSET)) -le 65535 ]; then
+            VLESS_PORT=$((OLD_VLESS_PORT + OFFSET))
+        else
+            VLESS_PORT=$((OLD_VLESS_PORT - OFFSET))
+        fi
+        
+        if [ -n "$OLD_SOCKS_PORT" ]; then
+            if [ $((OLD_SOCKS_PORT + OFFSET)) -le 65535 ]; then
+                SOCKS_PORT=$((OLD_SOCKS_PORT + OFFSET))
+            else
+                SOCKS_PORT=$((OLD_SOCKS_PORT - OFFSET))
+            fi
+            # 避免 VLESS 端口与 SOCKS5 端口重合
+            if [ "$SOCKS_PORT" -eq "$VLESS_PORT" ]; then
+                SOCKS_PORT=$((SOCKS_PORT + 1))
+            fi
+        fi
+        PORT_CONFIGURED=1
+        echo -e "${GREEN}已根据原有端口添加随机偏移 (+${OFFSET} 或 -${OFFSET}) 生成当前端口:${NC}"
+        echo -e "  - VLESS 端口: ${VLESS_PORT}"
+        if [ -n "$OLD_SOCKS_PORT" ]; then
+            echo -e "  - SOCKS5 端口: ${SOCKS_PORT}"
+        fi
+    fi
+fi
+
+if [ "$PORT_CONFIGURED" -ne 1 ]; then
+    # 手动输入端口配置（原本的逻辑）
+    read -p "请输入 VLESS 端口 [默认: 443]: " VLESS_PORT
+    VLESS_PORT=${VLESS_PORT:-443}
+    is_valid_port "$VLESS_PORT" || die "VLESS 端口无效: $VLESS_PORT"
+    ORIG_VLESS_PORT="$VLESS_PORT"
+    VLESS_PORT="$(find_next_free_port "$VLESS_PORT")" || die "未找到可用的 VLESS 端口。"
+    if [ "$VLESS_PORT" != "$ORIG_VLESS_PORT" ]; then
+        echo -e "${YELLOW}VLESS 端口 ${ORIG_VLESS_PORT} 已被占用，自动调整为 ${VLESS_PORT}${NC}"
+    fi
+    if [ "$PROTO_CHOICE" != "2" ]; then
+        read -p "请输入 SOCKS5 端口 [默认: 1080]: " SOCKS_PORT
+        SOCKS_PORT=${SOCKS_PORT:-1080}
+        is_valid_port "$SOCKS_PORT" || die "SOCKS5 端口无效: $SOCKS_PORT"
+        ORIG_SOCKS_PORT="$SOCKS_PORT"
+        if [ "$SOCKS_PORT" -eq "$VLESS_PORT" ]; then
+            SOCKS_PORT=$((SOCKS_PORT + 1))
+        fi
+        SOCKS_PORT="$(find_next_free_port "$SOCKS_PORT")" || die "未找到可用的 SOCKS5 端口。"
+        if [ "$SOCKS_PORT" != "$ORIG_SOCKS_PORT" ]; then
+            echo -e "${YELLOW}SOCKS5 端口 ${ORIG_SOCKS_PORT} 已冲突或被占用，自动调整为 ${SOCKS_PORT}${NC}"
+        fi
+    fi
+else
+    # 如果沿用或随机生成了端口，仍然需要校验生成的端口合法性并检查是否被占用（万一用户选择的旧端口目前被别的程序抢占了）
+    is_valid_port "$VLESS_PORT" || die "生成的 VLESS 端口无效: $VLESS_PORT"
+    ORIG_VLESS_PORT="$VLESS_PORT"
+    VLESS_PORT="$(find_next_free_port "$VLESS_PORT")" || die "未找到可用的 VLESS 端口。"
+    if [ "$VLESS_PORT" != "$ORIG_VLESS_PORT" ]; then
+        echo -e "${YELLOW}警告: 预选 VLESS 端口 ${ORIG_VLESS_PORT} 已被其他程序占用，已自动调整为 ${VLESS_PORT}${NC}"
+    fi
+    
+    if [ "$PROTO_CHOICE" != "2" ]; then
+        # 如果原来没启用 SOCKS5 端口，但新模式开启了，需要生成/配置 SOCKS_PORT
+        if [ -z "${SOCKS_PORT:-}" ]; then
+            SOCKS_PORT=1080
+        fi
+        if [ "$SOCKS_PORT" -eq "$VLESS_PORT" ]; then
+            SOCKS_PORT=$((SOCKS_PORT + 1))
+        fi
+        is_valid_port "$SOCKS_PORT" || die "生成的 SOCKS5 端口无效: $SOCKS_PORT"
+        ORIG_SOCKS_PORT="$SOCKS_PORT"
+        SOCKS_PORT="$(find_next_free_port "$SOCKS_PORT")" || die "未找到可用的 SOCKS5 端口。"
+        if [ "$SOCKS_PORT" != "$ORIG_SOCKS_PORT" ]; then
+            echo -e "${YELLOW}警告: 预选 SOCKS5 端口 ${ORIG_SOCKS_PORT} 已冲突或被占用，已自动调整为 ${SOCKS_PORT}${NC}"
+        fi
     fi
 fi
 
@@ -160,6 +385,16 @@ OPTIMIZE_CHOICE=${OPTIMIZE_CHOICE:-Y}
 # 1. 自动清理冲突版本 (解决 dpkg 报错)
 echo -e "\n正在检查并清理旧版本..."
 $SUDO systemctl stop sing-box &>/dev/null || true
+
+# 清理旧的防火墙端口放行规则，避免端口残留
+if [ -n "${OLD_VLESS_PORT:-}" ]; then
+    echo "正在清理旧的 VLESS 防火墙规则 (端口: ${OLD_VLESS_PORT})..."
+    cleanup_old_firewall_rules "$OLD_VLESS_PORT"
+fi
+if [ -n "${OLD_SOCKS_PORT:-}" ]; then
+    echo "正在清理旧的 SOCKS5 防火墙规则 (端口: ${OLD_SOCKS_PORT})..."
+    cleanup_old_firewall_rules "$OLD_SOCKS_PORT"
+fi
 $SUDO apt-mark unhold sing-box sing-box-beta >/dev/null 2>&1 || true
 $SUDO apt-get remove --purge sing-box sing-box-beta -y &>/dev/null || true
 $SUDO apt-get autoremove -y &>/dev/null || true
@@ -605,6 +840,7 @@ except Exception as e:
         fi
     fi
     echo -e "${CYAN}==================================================${NC}"
+    show_firewall_summary
 else
     echo -e "${RED}校验失败，请检查配置文件内容。${NC}"
 fi

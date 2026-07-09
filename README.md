@@ -11,6 +11,7 @@ bash <(curl -sL "https://raw.githubusercontent.com/zyhw/singbox/refs/heads/main/
 > The installer validates port inputs, supports both root/sudo execution, and aborts safely on critical errors.
 > It now enforces exact `1.12.x` apt version resolution, validates generated Reality keys/UUID, and stores output credentials with `0600` permissions.
 > If a requested port is already in use (or conflicts between VLESS/SOCKS), the installer auto-increments (`+1`) until a free port is found.
+> During reinstallation, the script automatically parses your previous config to let you reuse the existing ports, randomize them with an offset (1-100), or input custom ones. It cleans up obsolete firewall rules to prevent security leaks and outputs a final firewall status summary.
 > If the GitHub package download succeeds but `dpkg -i` fails, the script automatically falls back to apt installation.
 > SOCKS5 credentials are now independently generated (not shared with the VLESS UUID).
 
@@ -64,8 +65,9 @@ bash <(curl -sL "https://raw.githubusercontent.com/zyhw/singbox/refs/heads/main/
 - Deep kernel and network optimization support (BBR, ulimit, TCP/UDP buffers, network backlog queues)
 - Conservative memory-aware optimization profile with rollback support
 - Optional post-deploy SNI TLS 1.3 handshake check with warning output
-- Auto-add UFW allow rules for selected ports when UFW is active
-- Automatic port conflict handling (detect occupied ports and shift to next available port)
+- Auto-add firewall rules (supporting UFW, Firewalld, Iptables, and 1Panel) for selected ports, with automatic removal of obsolete rules on reinstallation
+- Automatic port conflict handling (detect occupied ports and shift to next available port), or reuse/randomly shift previously configured ports
+- Post-install firewall summary listing active rules for sing-box ports
 - Modernized JSON configuration template supporting sing-box 1.12.0+ and 1.14.0+ DNS and route specifications (no deprecation warnings)
 
 ## Service Management
