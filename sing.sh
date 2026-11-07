@@ -178,17 +178,17 @@ show_firewall_summary() {
     echo -e "${CYAN}==================================================${NC}"
 }
 
-get_latest_apt_112_version() {
+get_latest_apt_114_version() {
     apt-cache madison sing-box 2>/dev/null \
         | awk '{print $3}' \
-        | grep -E '^1\.12\.[0-9]+([-+~].*)?$' \
+        | grep -E '^1\.14\.[0-9]+([-+~].*)?$' \
         | sort -V \
         | tail -n 1
 }
 
-install_sing_box_apt_112() {
+install_sing_box_apt_114() {
     local ver
-    ver="$(get_latest_apt_112_version)"
+    ver="$(get_latest_apt_114_version)"
     if [ -n "$ver" ]; then
         $SUDO apt-mark unhold sing-box sing-box-beta >/dev/null 2>&1 || true
         if ! $SUDO apt-get install -yq --allow-downgrades --allow-change-held-packages "sing-box=$ver"; then
@@ -196,18 +196,18 @@ install_sing_box_apt_112() {
             $SUDO apt-get install -yq --allow-downgrades --allow-change-held-packages "sing-box=$ver"
         fi
     else
-        die "apt 源中未找到 sing-box 1.12.x 版本。"
+        die "apt 源中未找到 sing-box 1.14.x 版本。"
     fi
 }
 
-get_latest_github_112_version() {
+get_latest_github_114_version() {
     local tmp_file
     tmp_file="$(mktemp)"
     if curl -fsSL --connect-timeout 5 --max-time 20 \
         "https://api.github.com/repos/SagerNet/sing-box/releases?per_page=100" \
         -o "$tmp_file"; then
         jq -r '.[].tag_name' "$tmp_file" 2>/dev/null \
-            | sed -n 's/^v\(1\.12\.[0-9]\+\)$/\1/p' \
+            | sed -n 's/^v\(1\.14\.[0-9]\+\)$/\1/p' \
             | sort -V \
             | tail -n 1
     fi
@@ -377,7 +377,7 @@ fi
 
 echo -e "\n请选择 sing-box 安装方式:"
 echo "1. 从官方 apt 软件源安装 (推荐, 由源决定具体版本)"
-echo "2. 从 GitHub 下载最新的 1.12.x Release 离线安装"
+echo "2. 从 GitHub 下载最新的 1.14.x Release 离线安装"
 read -p "请输入选项 [默认: 1]: " INSTALL_CHOICE
 INSTALL_CHOICE=${INSTALL_CHOICE:-1}
 if [ "$INSTALL_CHOICE" != "1" ] && [ "$INSTALL_CHOICE" != "2" ]; then
@@ -424,12 +424,12 @@ Signed-By: /etc/apt/keyrings/sagernet.asc" | $SUDO tee /etc/apt/sources.list.d/s
 $SUDO apt-get update -qq
 
 if [ "$INSTALL_CHOICE" == "2" ]; then
-    echo "正在从 GitHub 获取最新的 sing-box 1.12.x 版本..."
+    echo "正在从 GitHub 获取最新的 sing-box 1.14.x 版本..."
     ARCH=$(dpkg --print-architecture)
-    GITHUB_LATEST="$(get_latest_github_112_version || true)"
+    GITHUB_LATEST="$(get_latest_github_114_version || true)"
     if [ -z "$GITHUB_LATEST" ]; then
         echo -e "${RED}无法从 GitHub 获取最新版本，自动回退到 apt 软件源安装...${NC}"
-        install_sing_box_apt_112
+        install_sing_box_apt_114
     else
         DOWNLOAD_URL="https://github.com/SagerNet/sing-box/releases/download/v${GITHUB_LATEST}/sing-box_${GITHUB_LATEST}_linux_${ARCH}.deb"
         FILE_NAME="/tmp/sing-box_${GITHUB_LATEST}_linux_${ARCH}.deb"
@@ -438,17 +438,17 @@ if [ "$INSTALL_CHOICE" == "2" ]; then
             $SUDO dpkg -i "$FILE_NAME" || {
                 echo -e "${YELLOW}dpkg 安装失败，自动清理并回退到 apt 软件源安装...${NC}"
                 rm -f "$FILE_NAME"
-                install_sing_box_apt_112
+                install_sing_box_apt_114
             }
             rm -f "$FILE_NAME"
         else
             echo -e "${RED}包下载失败，自动回退到 apt 软件源安装...${NC}"
-            install_sing_box_apt_112
+            install_sing_box_apt_114
         fi
     fi
 else
-    echo "正在从 apt 软件源安装 sing-box 1.12.x 稳定版..."
-    install_sing_box_apt_112
+    echo "正在从 apt 软件源安装 sing-box 1.14.x 稳定版..."
+    install_sing_box_apt_114
 fi
 
 # 锁定版本，避免被 apt upgrade 自动升级掉
@@ -606,7 +606,6 @@ cat <<EOF | $SUDO tee /etc/sing-box/config.json > /dev/null
     }"; fi)
   ],
   "outbounds": [
-    { "tag": "阻断", "type": "block" },
     { "tag": "直接出站", "type": "direct" }
   ],
   "route": {
@@ -615,7 +614,8 @@ cat <<EOF | $SUDO tee /etc/sing-box/config.json > /dev/null
       "strategy": "prefer_ipv4"
     },
     "rules": [
-      { "protocol": "bittorrent", "outbound": "阻断" },
+      { "action": "sniff" },
+      { "protocol": "bittorrent", "action": "reject" },
       { "ip_is_private": true, "outbound": "直接出站" },
       { "rule_set": ["geosite-cn", "geoip-cn"], "outbound": "直接出站" }
     ],
