@@ -67,7 +67,7 @@ get_latest_github_version_by_prefix() {
     rm -f "$tmp_file"
 }
 
-CURRENT_VERSION=$(sing-box version 2>/dev/null | head -1 | awk '{print $NF}')
+CURRENT_VERSION=$(sing-box version 2>/dev/null | head -1 | awk '{print $NF}' || true)
 echo -e "${CYAN}当前版本: ${CURRENT_VERSION:-未安装}${NC}"
 echo -e "${CYAN}目标版本: ${TARGET_VERSION}${NC}"
 
@@ -88,6 +88,9 @@ $SUDO apt-get update -qq
 # 3. 升级
 if [ "$UPGRADE_CHOICE" == "2" ]; then
     echo "正在从 GitHub 获取最新的 release 进行升级..."
+    if ! command -v curl >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
+        $SUDO apt-get install -y curl jq >/dev/null 2>&1 || true
+    fi
     ARCH=$(dpkg --print-architecture)
     if [[ "$TARGET_VERSION" == *"*"* ]]; then
         PREFIX=$(echo "$TARGET_VERSION" | sed 's/\.\*$//')
@@ -163,7 +166,7 @@ else
         echo -e "${GREEN}软件源升级成功: ${CURRENT_VERSION:-N/A} → ${NEW_VERSION}${NC}"
     else
         if $SUDO apt-get install "sing-box=${TARGET_VERSION}" -y --allow-downgrades --allow-change-held-packages; then
-            NEW_VERSION=$(sing-box version | head -1 | awk '{print $NF}')
+            NEW_VERSION=$(sing-box version 2>/dev/null | head -1 | awk '{print $NF}' || true)
             echo -e "${GREEN}软件源升级成功: ${CURRENT_VERSION:-N/A} → ${NEW_VERSION}${NC}"
         else
             echo -e "${RED}升级失败，请检查版本号是否正确。${NC}"

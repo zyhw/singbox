@@ -38,12 +38,22 @@ is_port_in_use() {
 
 find_next_free_port() {
     local port="$1"
-    while [ "$port" -le 65535 ]; do
-        if ! is_port_in_use "$port"; then
-            echo "$port"
+    local exclude_port="${2:-}"
+    local p="$port"
+    while [ "$p" -le 65535 ]; do
+        if [ "$p" != "$exclude_port" ] && ! is_port_in_use "$p"; then
+            echo "$p"
             return 0
         fi
-        port=$((port + 1))
+        p=$((p + 1))
+    done
+    p=1024
+    while [ "$p" -lt "$port" ]; do
+        if [ "$p" != "$exclude_port" ] && ! is_port_in_use "$p"; then
+            echo "$p"
+            return 0
+        fi
+        p=$((p + 1))
     done
     return 1
 }
@@ -127,7 +137,7 @@ show_firewall_summary() {
             fi
         fi
         if [ -n "$pattern" ]; then
-            $SUDO ufw status numbered | grep -E "(${pattern})" || echo "  未在 UFW 中找到对应规则"
+            $SUDO ufw status numbered | grep -E "(^|[[:space:]])(${pattern})(/tcp|[[:space:]]|$)" || echo "  未在 UFW 中找到对应规则"
         else
             echo "  未配置端口规则"
         fi
@@ -154,7 +164,7 @@ show_firewall_summary() {
             fi
         fi
         if [ -n "$pattern" ]; then
-            $SUDO iptables -L INPUT -n --line-numbers | grep -E "dpt:(${pattern})" || echo "  未在 Iptables 中找到对应规则"
+            $SUDO iptables -L INPUT -n --line-numbers | grep -E "dpt:(${pattern})([[:space:]]|$)" || echo "  未在 Iptables 中找到对应规则"
         else
             echo "  未配置端口规则"
         fi
@@ -233,8 +243,8 @@ if [ -f /etc/sing-box/config.json ]; then
         fi
     fi
     if command -v jq >/dev/null 2>&1; then
-        OLD_VLESS_PORT=$(jq -r '.inbounds[] | select(.type=="vless") | .listen_port' /etc/sing-box/config.json 2>/dev/null || true)
-        OLD_SOCKS_PORT=$(jq -r '.inbounds[] | select(.type=="socks") | .listen_port' /etc/sing-box/config.json 2>/dev/null || true)
+        OLD_VLESS_PORT=$(jq -r '.inbounds[] | select(.type=="vless") | .listen_port' /etc/sing-box/config.json 2>/dev/null | head -n 1 || true)
+        OLD_SOCKS_PORT=$(jq -r '.inbounds[] | select(.type=="socks") | .listen_port' /etc/sing-box/config.json 2>/dev/null | head -n 1 || true)
         
         if ! [[ "$OLD_VLESS_PORT" =~ ^[0-9]+$ ]]; then
             OLD_VLESS_PORT=""
@@ -306,7 +316,11 @@ if [ -n "$OLD_VLESS_PORT" ]; then
             fi
             # 避免 VLESS 端口与 SOCKS5 端口重合
             if [ "$SOCKS_PORT" -eq "$VLESS_PORT" ]; then
-                SOCKS_PORT=$((SOCKS_PORT + 1))
+                if [ "$SOCKS_PORT" -lt 65535 ]; then
+                    SOCKS_PORT=$((SOCKS_PORT + 1))
+                else
+                    SOCKS_PORT=$((SOCKS_PORT - 1))
+                fi
             fi
         fi
         PORT_CONFIGURED=1
@@ -333,10 +347,7 @@ if [ "$PORT_CONFIGURED" -ne 1 ]; then
         SOCKS_PORT=${SOCKS_PORT:-1080}
         is_valid_port "$SOCKS_PORT" || die "SOCKS5 端口无效: $SOCKS_PORT"
         ORIG_SOCKS_PORT="$SOCKS_PORT"
-        if [ "$SOCKS_PORT" -eq "$VLESS_PORT" ]; then
-            SOCKS_PORT=$((SOCKS_PORT + 1))
-        fi
-        SOCKS_PORT="$(find_next_free_port "$SOCKS_PORT")" || die "未找到可用的 SOCKS5 端口。"
+        SOCKS_PORT="$(find_next_free_port "$SOCKS_PORT" "$VLESS_PORT")" || die "未找到可用的 SOCKS5 端口。"
         if [ "$SOCKS_PORT" != "$ORIG_SOCKS_PORT" ]; then
             echo -e "${YELLOW}SOCKS5 端口 ${ORIG_SOCKS_PORT} 已冲突或被占用，自动调整为 ${SOCKS_PORT}${NC}"
         fi
@@ -355,12 +366,9 @@ else
         if [ -z "${SOCKS_PORT:-}" ]; then
             SOCKS_PORT=1080
         fi
-        if [ "$SOCKS_PORT" -eq "$VLESS_PORT" ]; then
-            SOCKS_PORT=$((SOCKS_PORT + 1))
-        fi
         is_valid_port "$SOCKS_PORT" || die "生成的 SOCKS5 端口无效: $SOCKS_PORT"
         ORIG_SOCKS_PORT="$SOCKS_PORT"
-        SOCKS_PORT="$(find_next_free_port "$SOCKS_PORT")" || die "未找到可用的 SOCKS5 端口。"
+        SOCKS_PORT="$(find_next_free_port "$SOCKS_PORT" "$VLESS_PORT")" || die "未找到可用的 SOCKS5 端口。"
         if [ "$SOCKS_PORT" != "$ORIG_SOCKS_PORT" ]; then
             echo -e "${YELLOW}警告: 预选 SOCKS5 端口 ${ORIG_SOCKS_PORT} 已冲突或被占用，已自动调整为 ${SOCKS_PORT}${NC}"
         fi
@@ -671,7 +679,7 @@ $([ -n "$SERVER_IP6" ] && echo -e "\n==================== VLESS Reality (IPv6) =
 EOL
     fi
 
-    if ! openssl s_client -connect "${SNI}:443" -tls1_3 </dev/null 2>/dev/null | grep -q "TLSv1.3"; then
+    if ! timeout 5 openssl s_client -connect "${SNI}:443" -servername "${SNI}" -tls1_3 </dev/null 2>/dev/null | grep -q "TLSv1.3"; then
         echo -e "${YELLOW}警告: 当前 SNI($SNI) 可能不支持 TLS 1.3，建议更换后重试。${NC}"
     fi
 
@@ -767,13 +775,21 @@ EOL
 
             # 1. 写入 1panel_basic.rules 规则文件
             rules_file="/opt/1panel/firewall/1panel_basic.rules"
-            if [ -f "$rules_file" ]; then
-                if ! grep -q "dport ${VLESS_PORT} " "$rules_file"; then
-                    echo "-A 1PANEL_BASIC -p tcp -m tcp --dport ${VLESS_PORT} -j ACCEPT" >> "$rules_file"
+            if $SUDO test -f "$rules_file"; then
+                if ! $SUDO grep -q "dport ${VLESS_PORT} " "$rules_file"; then
+                    if $SUDO grep -q "^COMMIT" "$rules_file"; then
+                        $SUDO sed -i "/^COMMIT/i -A 1PANEL_BASIC -p tcp -m tcp --dport ${VLESS_PORT} -j ACCEPT" "$rules_file"
+                    else
+                        echo "-A 1PANEL_BASIC -p tcp -m tcp --dport ${VLESS_PORT} -j ACCEPT" | $SUDO tee -a "$rules_file" >/dev/null
+                    fi
                 fi
                 if [ "$PROTO_CHOICE" != "2" ]; then
-                    if ! grep -q "dport ${SOCKS_PORT} " "$rules_file"; then
-                        echo "-A 1PANEL_BASIC -p tcp -m tcp --dport ${SOCKS_PORT} -j ACCEPT" >> "$rules_file"
+                    if ! $SUDO grep -q "dport ${SOCKS_PORT} " "$rules_file"; then
+                        if $SUDO grep -q "^COMMIT" "$rules_file"; then
+                            $SUDO sed -i "/^COMMIT/i -A 1PANEL_BASIC -p tcp -m tcp --dport ${SOCKS_PORT} -j ACCEPT" "$rules_file"
+                        else
+                            echo "-A 1PANEL_BASIC -p tcp -m tcp --dport ${SOCKS_PORT} -j ACCEPT" | $SUDO tee -a "$rules_file" >/dev/null
+                        fi
                     fi
                 fi
             fi
@@ -781,7 +797,7 @@ EOL
             # 2. 写入 agent.db 数据库
             db_file="/opt/1panel/db/agent.db"
             
-            python3 -c "
+            $SUDO python3 -c "
 import sqlite3, datetime
 try:
     conn = sqlite3.connect('$db_file')
