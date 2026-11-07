@@ -1,11 +1,13 @@
 # singbox
 
-sing-box fully automated deployment & upgrade scripts.
+sing-box fully automated deployment & upgrade scripts (`1.12.x` branch).
+
+> **Note:** This branch preserves **sing-box `1.12.x`** support. For the latest **sing-box `1.14.x`** (and automatic `1.12` → `1.14` migration), use the default [`main` branch](https://github.com/zyhw/singbox/tree/main).
 
 ## One-click Installation
 
 ```bash
-bash <(curl -sL "https://raw.githubusercontent.com/zyhw/singbox/refs/heads/main/sing.sh")
+bash <(curl -sL "https://raw.githubusercontent.com/zyhw/singbox/refs/heads/1.12/sing.sh")
 ```
 
 > The installer validates port inputs, supports both root/sudo execution, and aborts safely on critical errors.
@@ -19,10 +21,10 @@ bash <(curl -sL "https://raw.githubusercontent.com/zyhw/singbox/refs/heads/main/
 
 ```bash
 # Upgrade to the latest 1.12.x version
-bash <(curl -sL "https://raw.githubusercontent.com/zyhw/singbox/refs/heads/main/upgrade.sh")
+bash <(curl -sL "https://raw.githubusercontent.com/zyhw/singbox/refs/heads/1.12/upgrade.sh")
 
 # Upgrade to a specific version
-bash <(curl -sL "https://raw.githubusercontent.com/zyhw/singbox/refs/heads/main/upgrade.sh") 1.12.24
+bash <(curl -sL "https://raw.githubusercontent.com/zyhw/singbox/refs/heads/1.12/upgrade.sh") 1.12.24
 ```
 
 > The upgrade will not overwrite your configuration files. The script automatically handles version locking, verification, and service restarts.
@@ -32,13 +34,13 @@ bash <(curl -sL "https://raw.githubusercontent.com/zyhw/singbox/refs/heads/main/
 The one-click installation script already includes optimization options during setup. If you have an existing server and only want to add network and kernel optimizations (BBR, queue tuning, and memory-aware TCP/UDP buffers), you can run this command separately (no reinstallation required):
 
 ```bash
-bash <(curl -sL "https://raw.githubusercontent.com/zyhw/singbox/refs/heads/main/optimize.sh")
+bash <(curl -sL "https://raw.githubusercontent.com/zyhw/singbox/refs/heads/1.12/optimize.sh")
 ```
 
 Rollback command:
 
 ```bash
-bash <(curl -sL "https://raw.githubusercontent.com/zyhw/singbox/refs/heads/main/optimize.sh") rollback
+bash <(curl -sL "https://raw.githubusercontent.com/zyhw/singbox/refs/heads/1.12/optimize.sh") rollback
 ```
 
 > The optimization script writes persistent drop-in files:
